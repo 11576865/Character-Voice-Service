@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 venv/
 .env
+.pytest-tmp/
+test-results/
 
 # Generated audio / cache
 output/
@@ -14,8 +16,8 @@ cache/
 # Local voice assets and private configs
 references/*
 !references/.gitkeep
-voices/*.local.json
-voices/default.json
+voices/*.json
+!voices/example.json
 
 # Model weights
 *.pth

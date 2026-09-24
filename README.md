@@ -1,169 +1,117 @@
 # Character Voice Service
 
-一个面向本地角色语音生成的轻量服务层。当前后端使用 **GPT-SoVITS**，通过稳定的 HTTP API 将“客户端”与“具体语音模型实现”分离。
+一个面向本地角色语音生成的轻量服务层。当前后端使用 **GPT-SoVITS**，通过稳定的 HTTP API 将客户端与具体语音模型实现分离。
 
-> 当前阶段：Milestone 0 / 局域网原型。目标不是一次性完成多角色、缓存、流式传输和 Android 本地推理，而是先把“手机 → Character Voice Service → GPT-SoVITS → 音频”这条路径稳定下来。
+## Milestone 0
+
+完整目标是：让 Android 手机通过系统 TTS，稳定地让一个 GPT-SoVITS 角色连续朗读 20 段文字。
+
+当前浏览器测试页只用于验证局域网 HTTP 和音频返回链路，不是 Milestone 0 的最终验收。本阶段保持单角色、单语言，不实现缓存、流式、多角色、情绪、LLM 或 EPUB。
 
 ## 当前架构
 
 ```text
-Android / 浏览器 / 其他客户端
-            │
-            │ HTTP
-            ▼
+Android 系统 TTS / 浏览器测试页
+            ↓ HTTP
 Character Voice Service :9881
-            │
-            │ localhost
-            ▼
+            ↓ localhost
       GPT-SoVITS :9880
-            │
-            ▼
+            ↓
           WAV
 ```
 
-GPT-SoVITS 建议继续只监听 `127.0.0.1:9880`，局域网只暴露本项目的适配层。
+GPT-SoVITS 建议只监听 `127.0.0.1:9880`，局域网只暴露本项目的适配层。
 
 ## 已实现
 
-- `POST /v1/audio/speech`：OpenAI 风格的语音生成入口
-- `GET /health`：服务与 GPT-SoVITS 后端状态
-- `GET /v1/voices`：列出本地角色配置
-- `GET /test`：手机/电脑浏览器测试页面
-- JSON 角色配置
-- GPT-SoVITS 参数映射
-- WAV 返回与可选本地保存
-- 局域网监听
+- `POST /v1/audio/speech`：OpenAI 风格的语音生成入口；
+- `GET /health`：服务与 GPT-SoVITS 后端状态；
+- `GET /v1/voices`：读取本地角色配置；
+- `GET /test`：电脑或手机浏览器测试页；
+- JSON 角色配置和 GPT-SoVITS 参数映射；
+- WAV 返回与可选本地保存；
+- 局域网监听。
 
-## 目录
+## Windows 首次设置
 
-```text
-Character-Voice-Service/
-├── server/
-│   ├── app.py
-│   ├── config.py
-│   └── backends/
-│       └── gpt_sovits.py
-├── voices/
-│   └── example.json
-├── references/
-├── web/
-│   └── index.html
-├── tests/
-├── docs/
-├── scripts/
-│   └── run_server.ps1
-├── requirements.txt
-└── .gitignore
-```
-
-## 角色配置
-
-复制：
-
-```text
-voices/example.json
-```
-
-为：
-
-```text
-voices/default.json
-```
-
-然后修改其中的参考音频路径和逐字参考文本。参考文本必须对应参考音频实际说出的内容；它不是给模型的自然语言指令。
-
-示例：
-
-```json
-{
-  "name": "default",
-  "reference_audio": "C:/path/to/reference.wav",
-  "reference_text": "The exact sentence spoken in the reference audio.",
-  "reference_language": "en",
-  "target_language": "en",
-  "parameters": {
-    "top_k": 15,
-    "top_p": 1.0,
-    "temperature": 1.0,
-    "text_split_method": "cut5",
-    "repetition_penalty": 1.35,
-    "sample_steps": 32
-  }
-}
-```
-
-真实角色配置、参考音频、模型权重和生成缓存默认不应提交到 GitHub。
-
-## 启动
-
-先启动 GPT-SoVITS：
+需要 Python 3.10 或更高版本。首次运行：
 
 ```powershell
-.\runtime\python.exe api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
+.\scripts\first_setup.cmd
 ```
 
-然后在本仓库根目录启动 Character Voice Service。
+脚本会检查可用的 Python、创建项目 `.venv`、安装 `requirements.txt`，并确认 `voices/` 中至少有一个有效的真实角色配置。`voices/example.json` 只是模板，不计入真实角色。
 
-如果使用 GPT-SoVITS 整合包的 Python：
+复制角色配置模板：
 
 ```powershell
-C:\path\to\GPT-SoVITS\runtime\python.exe -m server.app
+Copy-Item .\voices\example.json .\voices\march-7th.json
 ```
 
-默认：
+文件名 stem 是稳定的 voice ID，例如 `march-7th.json` 对应 API 参数 `"voice": "march-7th"`。JSON 内的 `name` 是界面显示名称，例如 `"March 7th"`。然后填写参考音频路径和逐字参考文本；参考文本必须对应音频实际说出的内容。除 `example.json` 外的角色配置都被 Git 忽略，不要提交真实路径、参考音频或模型文件。
 
-- Character Voice Service：`0.0.0.0:9881`
-- GPT-SoVITS：`127.0.0.1:9880`
-- 生成 WAV 调试副本：Windows“音乐”目录
+## 日常启动
 
-浏览器测试：
+先启动本机 GPT-SoVITS，再在仓库根目录运行：
 
-```text
-http://127.0.0.1:9881/test
+```powershell
+.\scripts\run_server.cmd
 ```
 
-手机在同一局域网时：
+首次设置的 `.cmd` 入口会以仅对当前进程生效的方式调用 PowerShell，因此不需要修改系统执行策略；日常启动入口会直接使用项目 `.venv`。
 
-```text
-http://<电脑局域网IP>:9881/test
-```
+浏览器测试地址：`http://127.0.0.1:9881/test`。同一可信局域网内的手机可访问 `http://<电脑局域网IP>:9881/test`。
 
 ## API 示例
 
 ```json
-POST /v1/audio/speech
-
 {
   "model": "gpt-sovits",
-  "voice": "default",
+  "voice": "march-7th",
   "input": "This is a test from my phone.",
   "response_format": "wav",
   "speed": 1.0
 }
 ```
 
-返回 `audio/wav`。
+发送到 `POST /v1/audio/speech`，成功时返回 `audio/wav`。
 
-## 当前范围
+## 测试
 
-当前版本刻意不处理：
+完成首次设置后运行：
 
-- 自动情绪/场景选择
-- 多参考音频自动路由
-- 多模型热切换
-- 流式音频
-- N+1 段落预取
-- 音频缓存
-- Android 本地 GPT-SoVITS
-- 公网暴露
-- Wake-on-LAN
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
 
-这些功能在基础链路经过连续阅读测试后再增加。
+自动测试不需要真实 GPT-SoVITS、参考音频或模型权重。
+
+### 连续阅读真实链路测试
+
+启动 GPT-SoVITS 和本服务后，顺序生成 20 段测试文本：
+
+```powershell
+.\.venv\Scripts\python.exe .\tests\continuous_read_test.py --voice march-7th
+```
+
+如果 `/v1/voices` 仅返回一个有效角色，可以省略 `--voice`。测试会逐段校验 WAV，并将音频和 `report.json` 写入被 Git 忽略的 `test-results/continuous-read/`。
+
+### 角色一致性测试
+
+使用同一角色和同一句文本重复生成 10 次：
+
+```powershell
+.\.venv\Scripts\python.exe .\tests\voice_consistency_test.py --voice march-7th
+```
+
+输出保存在 `test-results/voice-consistency/`。报告记录 API 请求参数、`seed`、`temperature`、`top_k`、`top_p`、生成耗时、WAV 时长、文件大小和 SHA-256 差异。
+
+GPT-SoVITS 输出具有采样随机性。该测试用于记录差异并确定参数基线，不自动判断音色好坏，也不作为质量评分。
+
+## 安全边界
+
+服务仅面向可信局域网。不要配置公网端口转发，也不要直接暴露在校园网、公共 Wi-Fi 或其他不可信网络中。
 
 ## 下一阶段
 
-1. 验证多个角色配置。
-2. 用测试网页完成手机端连续请求。
-3. 开发 Android 系统 TTS Engine。
-4. 在真实阅读器中连续朗读 20 段文本。
-5. 再评估缓存、预取、流式传输和离线 fallback。
+本轮工程基线完成后，再开始 Android TTS 接入，最终在真实阅读器中验证连续朗读 20 段文字。

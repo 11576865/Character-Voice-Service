@@ -19,6 +19,7 @@ from server.config import (
     VOICE_DIR,
     WEB_DIR,
 )
+from server.voice_profiles import iter_real_profile_paths, read_valid_profile
 
 
 app = FastAPI(
@@ -29,7 +30,7 @@ app = FastAPI(
 
 class SpeechRequest(BaseModel):
     model: str = "gpt-sovits"
-    voice: str = "default"
+    voice: str
     input: str
     response_format: str = "wav"
     speed: float = 1.0
@@ -38,6 +39,8 @@ class SpeechRequest(BaseModel):
 def load_voice_profile(name: str) -> dict:
     if not name or any(part in name for part in ("/", "\\", "..")):
         raise HTTPException(status_code=400, detail="invalid voice name")
+    if name.casefold() == "example":
+        raise HTTPException(status_code=404, detail="example is a template, not a voice")
 
     profile_path = VOICE_DIR / f"{name}.json"
 
@@ -48,25 +51,17 @@ def load_voice_profile(name: str) -> dict:
         )
 
     try:
-        with profile_path.open("r", encoding="utf-8") as handle:
-            profile = json.load(handle)
+        profile = read_valid_profile(profile_path)
     except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=500,
             detail=f"Invalid voice profile JSON: {name}",
         ) from exc
 
-    required = (
-        "reference_audio",
-        "reference_text",
-        "reference_language",
-        "target_language",
-    )
-    missing = [key for key in required if not profile.get(key)]
-    if missing:
+    except (ValueError, TypeError) as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Voice profile {name} missing fields: {', '.join(missing)}",
+            detail=f"Invalid voice profile {name}: {exc}",
         )
 
     return profile
@@ -119,10 +114,9 @@ def voices():
     VOICE_DIR.mkdir(parents=True, exist_ok=True)
 
     items = []
-    for path in sorted(VOICE_DIR.glob("*.json")):
+    for path in iter_real_profile_paths(VOICE_DIR):
         try:
-            with path.open("r", encoding="utf-8") as handle:
-                profile = json.load(handle)
+            profile = read_valid_profile(path)
             items.append(
                 {
                     "id": path.stem,

@@ -1,5 +1,5 @@
 {
-  "name": "example",
+  "name": "Example Character",
   "reference_audio": "C:/path/to/reference.wav",
   "reference_text": "The exact sentence spoken in the reference audio.",
   "reference_language": "en",
