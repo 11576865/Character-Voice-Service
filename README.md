@@ -6,7 +6,11 @@
 
 完整目标是：让 Android 手机通过系统 TTS，稳定地让一个 GPT-SoVITS 角色连续朗读 20 段文字。
 
-当前浏览器测试页只用于验证局域网 HTTP 和音频返回链路，不是 Milestone 0 的最终验收。本阶段保持单角色、单语言，不实现缓存、流式、多角色、情绪、LLM 或 EPUB。
+浏览器页面已扩展为 Reader Core 原型，支持手动文本和 UTF-8 TXT、章节与片段切分、连续播放及单段预取。系统 TTS 的 Android 验收仍需在后续阶段完成。
+
+## Milestone 1：Reader Core
+
+`/test` 页面现在使用独立的文本来源、切分器、队列和播放器模块。手动输入或 UTF-8 TXT 都转换为统一的 `TextDocument`；阅读队列只保留当前音频和一个预取音频。实现边界与后续 EPUB 接入方式见 [Reader 架构](docs/reader-architecture.md)。
 
 ## 当前架构
 
@@ -27,7 +31,7 @@ GPT-SoVITS 建议只监听 `127.0.0.1:9880`，局域网只暴露本项目的适�
 - `POST /v1/audio/speech`：OpenAI 风格的语音生成入口；
 - `GET /health`：服务与 GPT-SoVITS 后端状态；
 - `GET /v1/voices`：读取本地角色配置；
-- `GET /test`：电脑或手机浏览器测试页；
+- `GET /test`：电脑或手机浏览器 Reader 页面；
 - JSON 角色配置和 GPT-SoVITS 参数映射；
 - WAV 返回与可选本地保存；
 - 局域网监听。
@@ -60,7 +64,7 @@ Copy-Item .\voices\example.json .\voices\march-7th.json
 
 首次设置的 `.cmd` 入口会以仅对当前进程生效的方式调用 PowerShell，因此不需要修改系统执行策略；日常启动入口会直接使用项目 `.venv`。
 
-浏览器测试地址：`http://127.0.0.1:9881/test`。同一可信局域网内的手机可访问 `http://<电脑局域网IP>:9881/test`。
+浏览器 Reader 地址：`http://127.0.0.1:9881/test`。同一可信局域网内的手机可访问 `http://<电脑局域网IP>:9881/test`。在页面中输入文本或导入 UTF-8 TXT，选择角色后点击“开始”。TXT 会识别独立成段的章节标题；“暂停/继续”保留当前播放位置，“停止”会取消请求并重置阅读队列。
 
 ## API 示例
 
@@ -85,6 +89,8 @@ Copy-Item .\voices\example.json .\voices\march-7th.json
 ```
 
 自动测试不需要真实 GPT-SoVITS、参考音频或模型权重。
+
+Reader Core 的浏览器模块测试页位于 `tests/reader_core_test.html`。可从仓库根目录运行 `python -m http.server 8765`，然后在浏览器打开 `http://127.0.0.1:8765/tests/reader_core_test.html`；测试覆盖 TXT 读取、切分与队列状态。
 
 ### 连续阅读真实链路测试
 

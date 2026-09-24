@@ -27,6 +27,15 @@ def test_root_lists_public_endpoints():
     assert response.json()["voices"] == "/v1/voices"
 
 
+def test_reader_modules_are_served():
+    page = client.get("/test")
+    module = client.get("/reader-assets/js/reader.js")
+    assert page.status_code == 200
+    assert "/reader-assets/js/reader.js" in page.text
+    assert module.status_code == 200
+    assert "javascript" in module.headers["content-type"]
+
+
 def test_voice_list_reads_valid_profiles(tmp_path, monkeypatch):
     write_profile(tmp_path)
     (tmp_path / "example.json").write_text("{}", encoding="utf-8")

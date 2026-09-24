@@ -7,6 +7,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from server.backends.gpt_sovits import synthesize
@@ -26,6 +27,7 @@ app = FastAPI(
     title="Character Voice Service",
     version="0.1.0",
 )
+app.mount("/reader-assets", StaticFiles(directory=WEB_DIR), name="reader-assets")
 
 
 class SpeechRequest(BaseModel):

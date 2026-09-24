@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Character Voice Service 连续阅读</title>
+  <title>Character Voice Service Reader</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
     body { max-width: 860px; margin: 0 auto; padding: 24px; }
@@ -16,32 +16,25 @@
     select, input { padding: 7px; }
     button { min-width: 96px; padding: 10px 18px; cursor: pointer; }
     button:disabled { cursor: not-allowed; opacity: 0.55; }
-    audio { width: 100%; margin-top: 18px; }
     #status { min-height: 1.5em; margin-top: 16px; white-space: pre-wrap; }
-    #currentParagraph { margin-top: 12px; padding: 12px; border-left: 4px solid currentColor; white-space: pre-wrap; opacity: 0.85; }
+    #currentParagraph { margin-top: 12px; padding: 12px; border-left: 4px solid currentColor; white-space: pre-wrap; }
   </style>
 </head>
 <body>
-  <h1>Character Voice Service</h1>
-  <p>输入连续文本，并用一个或多个空行分隔段落。播放当前段时会预取下一段音频。</p>
+  <h1>Character Voice Service Reader</h1>
+  <p>输入文本或导入 UTF-8 TXT。阅读器按句子和长度切分，播放当前片段时预取下一片段。</p>
 
   <div class="settings">
-    <div>
-      <label for="voice">角色</label>
-      <select id="voice" disabled></select>
-    </div>
-    <div>
-      <label for="speed">速度</label>
-      <input id="speed" type="number" min="0.1" step="0.1" value="1.0">
-    </div>
+    <div><label for="voice">角色</label><select id="voice" disabled></select></div>
+    <div><label for="speed">速度</label><input id="speed" type="number" min="0.1" step="0.1" value="1.0"></div>
+    <div><label for="txtFile">导入 TXT</label><input id="txtFile" type="file" accept=".txt,text/plain"></div>
   </div>
 
-  <label for="text">文本（按空行切分段落）</label>
+  <label for="text">文本</label>
   <textarea id="text">The morning light reached the windows before the city began to stir.
 
-She opened the book, found her place, and continued reading from the previous evening.
-
-Each sentence arrived at an even pace, with enough time to hear every word clearly.</textarea>
+She opened the book, found her place, and continued reading from the previous evening.</textarea>
+  <p id="source">文本来源：手动输入</p>
 
   <div class="controls">
     <button id="start" disabled>开始</button>
@@ -49,265 +42,10 @@ Each sentence arrived at an even pace, with enough time to hear every word clear
     <button id="stop" disabled>停止</button>
   </div>
 
-  <audio id="player" controls></audio>
-  <div id="status">正在读取角色列表……</div>
-  <div id="currentParagraph" hidden></div>
-
-<script>
-const voiceSelect = document.getElementById("voice");
-const textInput = document.getElementById("text");
-const speedInput = document.getElementById("speed");
-const startButton = document.getElementById("start");
-const pauseButton = document.getElementById("pause");
-const stopButton = document.getElementById("stop");
-const player = document.getElementById("player");
-const statusBox = document.getElementById("status");
-const currentParagraphBox = document.getElementById("currentParagraph");
-
-let state = "idle";
-let paragraphs = [];
-let currentIndex = 0;
-let currentObjectUrl = null;
-let nextAudio = null;
-let nextAudioPromise = null;
-let activeRequests = new Set();
-let sessionId = 0;
-
-function splitParagraphs(text) {
-  return text.split(/\r?\n\s*\r?\n/).map(value => value.trim()).filter(Boolean);
-}
-
-function revokeCurrentAudio() {
-  if (currentObjectUrl) {
-    URL.revokeObjectURL(currentObjectUrl);
-    currentObjectUrl = null;
-  }
-  player.removeAttribute("src");
-  player.load();
-}
-
-function clearNextAudio() {
-  nextAudio = null;
-  nextAudioPromise = null;
-}
-
-function cancelRequests() {
-  for (const controller of activeRequests) controller.abort();
-  activeRequests.clear();
-}
-
-function updateControls() {
-  const hasVoice = Boolean(voiceSelect.value);
-  const busy = state === "loading" || state === "playing" || state === "paused";
-  startButton.disabled = !hasVoice || state === "loading" || state === "playing";
-  startButton.textContent = state === "paused" ? "继续" : "开始";
-  pauseButton.disabled = state !== "playing";
-  stopButton.disabled = state === "idle" || state === "completed";
-  voiceSelect.disabled = busy || !hasVoice;
-  textInput.disabled = busy;
-  speedInput.disabled = busy;
-}
-
-function showNoVoices(message) {
-  voiceSelect.innerHTML = "";
-  const option = document.createElement("option");
-  option.value = "";
-  option.textContent = "未找到真实角色配置";
-  voiceSelect.appendChild(option);
-  statusBox.textContent = message;
-  updateControls();
-}
-
-async function loadVoices() {
-  try {
-    const response = await fetch("/v1/voices");
-    const data = await response.json();
-    if (!response.ok) throw new Error(JSON.stringify(data));
-    voiceSelect.innerHTML = "";
-    for (const voice of data.voices) {
-      if (voice.error) continue;
-      const option = document.createElement("option");
-      option.value = voice.id;
-      option.textContent = voice.name || voice.id;
-      voiceSelect.appendChild(option);
-    }
-    if (!voiceSelect.options.length) {
-      showNoVoices("未找到真实角色配置。请先在 voices/ 中添加角色配置。");
-      return;
-    }
-    statusBox.textContent = "已就绪。";
-    updateControls();
-  } catch (error) {
-    showNoVoices("无法读取角色列表：" + error);
-  }
-}
-
-async function requestAudio(index, localSessionId) {
-  const controller = new AbortController();
-  activeRequests.add(controller);
-  try {
-    const response = await fetch("/v1/audio/speech", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        voice: voiceSelect.value,
-        input: paragraphs[index],
-        response_format: "wav",
-        speed: Number(speedInput.value)
-      })
-    });
-    if (localSessionId !== sessionId) throw new DOMException("Stopped", "AbortError");
-    if (!response.ok) throw new Error((await response.text()) || ("HTTP " + response.status));
-    return await response.blob();
-  } finally {
-    activeRequests.delete(controller);
-  }
-}
-
-function startPrefetch(index, localSessionId) {
-  if (index >= paragraphs.length || nextAudioPromise) return;
-  nextAudioPromise = requestAudio(index, localSessionId)
-    .then(blob => {
-      if (localSessionId !== sessionId) return null;
-      nextAudio = { index, blob };
-      if (state === "playing" && currentIndex + 1 === index) {
-        statusBox.textContent = `正在播放第 ${currentIndex + 1}/${paragraphs.length} 段；下一段已就绪。`;
-      }
-      return nextAudio;
-    })
-    .catch(error => ({ index, error }));
-}
-
-function waitForPlayback(localSessionId) {
-  return new Promise((resolve, reject) => {
-    function cleanup() {
-      player.removeEventListener("ended", onEnded);
-      player.removeEventListener("error", onError);
-    }
-    function onEnded() { cleanup(); resolve(); }
-    function onError() { cleanup(); reject(new Error("浏览器无法播放返回的 WAV。")); }
-    if (localSessionId !== sessionId) { resolve(); return; }
-    player.addEventListener("ended", onEnded, { once: true });
-    player.addEventListener("error", onError, { once: true });
-  });
-}
-
-async function playAll(localSessionId, firstBlob) {
-  let currentBlob = firstBlob;
-  while (currentIndex < paragraphs.length && localSessionId === sessionId) {
-    revokeCurrentAudio();
-    currentObjectUrl = URL.createObjectURL(currentBlob);
-    player.src = currentObjectUrl;
-    currentParagraphBox.hidden = false;
-    currentParagraphBox.textContent = paragraphs[currentIndex];
-    state = "playing";
-    statusBox.textContent = `正在播放第 ${currentIndex + 1}/${paragraphs.length} 段。`;
-    updateControls();
-
-    startPrefetch(currentIndex + 1, localSessionId);
-    await player.play();
-    await waitForPlayback(localSessionId);
-    if (localSessionId !== sessionId) return;
-
-    currentIndex += 1;
-    if (currentIndex >= paragraphs.length) break;
-
-    state = "loading";
-    statusBox.textContent = `正在等待第 ${currentIndex + 1}/${paragraphs.length} 段……`;
-    updateControls();
-    const prefetched = nextAudio || await nextAudioPromise;
-    if (localSessionId !== sessionId) return;
-    if (!prefetched) return;
-    if (prefetched.error) throw prefetched.error;
-    if (prefetched.index !== currentIndex) throw new Error("预取段落顺序错误。 ");
-    currentBlob = prefetched.blob;
-    clearNextAudio();
-  }
-
-  if (localSessionId === sessionId) {
-    state = "completed";
-    clearNextAudio();
-    statusBox.textContent = `朗读完成，共 ${paragraphs.length} 段。`;
-    updateControls();
-  }
-}
-
-async function startOrResume() {
-  if (state === "paused") {
-    state = "playing";
-    statusBox.textContent = nextAudio
-      ? `正在播放第 ${currentIndex + 1}/${paragraphs.length} 段；下一段已就绪。`
-      : `正在播放第 ${currentIndex + 1}/${paragraphs.length} 段。`;
-    updateControls();
-    try {
-      await player.play();
-    } catch (error) {
-      state = "paused";
-      statusBox.textContent = "无法继续播放：" + error;
-      updateControls();
-    }
-    return;
-  }
-
-  const newParagraphs = splitParagraphs(textInput.value);
-  const speed = Number(speedInput.value);
-  if (!newParagraphs.length) { statusBox.textContent = "请输入至少一段文本。"; return; }
-  if (!Number.isFinite(speed) || speed <= 0) { statusBox.textContent = "速度必须大于 0。"; return; }
-
-  sessionId += 1;
-  cancelRequests();
-  clearNextAudio();
-  revokeCurrentAudio();
-  paragraphs = newParagraphs;
-  currentIndex = 0;
-  const localSessionId = sessionId;
-  state = "loading";
-  statusBox.textContent = `正在生成第 1/${paragraphs.length} 段……`;
-  updateControls();
-
-  try {
-    const firstBlob = await requestAudio(0, localSessionId);
-    if (localSessionId !== sessionId) return;
-    await playAll(localSessionId, firstBlob);
-  } catch (error) {
-    if (error.name === "AbortError" || localSessionId !== sessionId) return;
-    state = "idle";
-    clearNextAudio();
-    statusBox.textContent = `第 ${currentIndex + 1}/${paragraphs.length} 段失败：\n${error}`;
-    updateControls();
-  }
-}
-
-function pauseReading() {
-  if (state !== "playing") return;
-  player.pause();
-  state = "paused";
-  statusBox.textContent = nextAudio
-    ? `已暂停在第 ${currentIndex + 1}/${paragraphs.length} 段；下一段已就绪。`
-    : `已暂停在第 ${currentIndex + 1}/${paragraphs.length} 段。`;
-  updateControls();
-}
-
-function stopReading() {
-  sessionId += 1;
-  cancelRequests();
-  player.pause();
-  revokeCurrentAudio();
-  clearNextAudio();
-  state = "idle";
-  paragraphs = [];
-  currentIndex = 0;
-  currentParagraphBox.hidden = true;
-  currentParagraphBox.textContent = "";
-  statusBox.textContent = "已停止。";
-  updateControls();
-}
-
-startButton.addEventListener("click", startOrResume);
-pauseButton.addEventListener("click", pauseReading);
-stopButton.addEventListener("click", stopReading);
-loadVoices();
-</script>
+  <audio id="audio" hidden></audio>
+  <div id="status" role="status" aria-live="polite">正在读取角色列表……</div>
+  <div id="currentChapter">当前章节：—</div>
+  <div id="currentParagraph">当前段落：—</div>
+  <script type="module" src="/reader-assets/js/reader.js"></script>
 </body>
 </html>
