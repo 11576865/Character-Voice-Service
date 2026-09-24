@@ -1,4 +1,5 @@
 import { documentFromManual, readTxtFile } from "./sources.js";
+import { readEpubFile } from "./epub_source.js";
 import { segmentDocument } from "./segmenter.js";
 import { AudioPlayer } from "./player.js";
 import { ReaderQueue } from "./queue.js";
@@ -7,16 +8,20 @@ const voiceSelect = document.getElementById("voice");
 const speedInput = document.getElementById("speed");
 const textInput = document.getElementById("text");
 const fileInput = document.getElementById("txtFile");
+const epubInput = document.getElementById("epubFile");
 const startButton = document.getElementById("start");
 const pauseButton = document.getElementById("pause");
 const stopButton = document.getElementById("stop");
 const statusBox = document.getElementById("status");
 const sourceBox = document.getElementById("source");
+const bookTitleBox = document.getElementById("bookTitle");
+const bookAuthorBox = document.getElementById("bookAuthor");
 const chapterBox = document.getElementById("currentChapter");
 const paragraphBox = document.getElementById("currentParagraph");
 
 let importedDocument = null;
 let sourceMessage = "手动输入";
+let bookMetadata = { title: "手动输入", author: "" };
 let importInProgress = false;
 
 async function requestAudio({ segment, voice, speed, signal }) {
@@ -51,6 +56,7 @@ function render(snapshot = queue.snapshot) {
   speedInput.disabled = active || importInProgress;
   textInput.disabled = active || importInProgress;
   fileInput.disabled = active || importInProgress;
+  epubInput.disabled = active || importInProgress;
 
   const segment = snapshot.currentSegment;
   chapterBox.textContent = segment ? `当前章节：${segment.chapterTitle}` : "当前章节：—";
@@ -66,6 +72,8 @@ function render(snapshot = queue.snapshot) {
   };
   statusBox.textContent = messages[snapshot.state];
   sourceBox.textContent = `文本来源：${sourceMessage}`;
+  bookTitleBox.textContent = `书名：${bookMetadata.title}`;
+  bookAuthorBox.textContent = `作者：${bookMetadata.author || "未提供"}`;
 }
 
 async function loadVoices() {
@@ -101,16 +109,42 @@ async function importTxt() {
     const parsed = await readTxtFile(file);
     importedDocument = parsed;
     sourceMessage = `TXT：${file.name}`;
+    bookMetadata = { title: parsed.title, author: "" };
     textInput.value = parsed.chapters.map(chapter =>
       `${chapter.title}\n\n${chapter.paragraphs.join("\n\n")}`
     ).join("\n\n");
-    sourceBox.textContent = `文本来源：${sourceMessage}，${parsed.chapters.length} 章`;
     statusBox.textContent = "TXT 已导入，点击开始朗读。";
   } catch (error) {
     statusBox.textContent = `TXT 导入失败：${error.message}`;
   } finally {
     importInProgress = false;
     fileInput.value = "";
+    const message = statusBox.textContent;
+    render();
+    statusBox.textContent = message;
+  }
+}
+
+async function importEpub() {
+  const file = epubInput.files?.[0];
+  if (!file) return;
+  importInProgress = true;
+  render();
+  statusBox.textContent = "正在解析 EPUB……";
+  try {
+    const parsed = await readEpubFile(file);
+    importedDocument = parsed.document;
+    bookMetadata = parsed.metadata;
+    sourceMessage = `EPUB：${file.name}，${parsed.document.chapters.length} 章`;
+    textInput.value = parsed.document.chapters.map(chapter =>
+      `${chapter.title}\n\n${chapter.paragraphs.join("\n\n")}`
+    ).join("\n\n");
+    statusBox.textContent = "EPUB 已导入，点击开始朗读。";
+  } catch (error) {
+    statusBox.textContent = `EPUB 导入失败：${error.message}`;
+  } finally {
+    importInProgress = false;
+    epubInput.value = "";
     const message = statusBox.textContent;
     render();
     statusBox.textContent = message;
@@ -140,9 +174,11 @@ async function startOrResume() {
 textInput.addEventListener("input", () => {
   importedDocument = null;
   sourceMessage = "手动输入";
+  bookMetadata = { title: "手动输入", author: "" };
   render();
 });
 fileInput.addEventListener("change", importTxt);
+epubInput.addEventListener("change", importEpub);
 startButton.addEventListener("click", startOrResume);
 pauseButton.addEventListener("click", () => queue.pause());
 stopButton.addEventListener("click", () => queue.stop());

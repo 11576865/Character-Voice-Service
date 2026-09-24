@@ -6,11 +6,11 @@
 
 完整目标是：让 Android 手机通过系统 TTS，稳定地让一个 GPT-SoVITS 角色连续朗读 20 段文字。
 
-浏览器页面已扩展为 Reader Core 原型，支持手动文本和 UTF-8 TXT、章节与片段切分、连续播放及单段预取。系统 TTS 的 Android 验收仍需在后续阶段完成。
+浏览器页面已扩展为 Reader Core 原型，支持手动文本、UTF-8 TXT 和 EPUB，保留章节与片段切分、连续播放及单段预取。系统 TTS 的 Android 验收仍需在后续阶段完成。
 
 ## Milestone 1：Reader Core
 
-`/test` 页面现在使用独立的文本来源、切分器、队列和播放器模块。手动输入或 UTF-8 TXT 都转换为统一的 `TextDocument`；阅读队列只保留当前音频和一个预取音频。实现边界与后续 EPUB 接入方式见 [Reader 架构](docs/reader-architecture.md)。
+`/test` 页面使用独立的文本来源、切分器、队列和播放器模块。手动输入、UTF-8 TXT 和 EPUB 都转换为统一的 `TextDocument`；阅读队列只保留当前音频和一个预取音频。实现边界见 [Reader 架构](docs/reader-architecture.md)，EPUB 解析方式见 [EPUB Text Source](docs/epub-source.md)。
 
 ## 当前架构
 
@@ -64,7 +64,7 @@ Copy-Item .\voices\example.json .\voices\march-7th.json
 
 首次设置的 `.cmd` 入口会以仅对当前进程生效的方式调用 PowerShell，因此不需要修改系统执行策略；日常启动入口会直接使用项目 `.venv`。
 
-浏览器 Reader 地址：`http://127.0.0.1:9881/test`。同一可信局域网内的手机可访问 `http://<电脑局域网IP>:9881/test`。在页面中输入文本或导入 UTF-8 TXT，选择角色后点击“开始”。TXT 会识别独立成段的章节标题；“暂停/继续”保留当前播放位置，“停止”会取消请求并重置阅读队列。
+浏览器 Reader 地址：`http://127.0.0.1:9881/test`。同一可信局域网内的手机可访问 `http://<电脑局域网IP>:9881/test`。在页面中输入文本，或导入 UTF-8 TXT / EPUB，选择角色后点击“开始”。TXT 会识别独立成段的章节标题；EPUB 显示书名、作者并按 spine 顺序阅读章节。“暂停/继续”保留当前播放位置，“停止”会取消请求并重置阅读队列。
 
 ## API 示例
 
@@ -90,7 +90,7 @@ Copy-Item .\voices\example.json .\voices\march-7th.json
 
 自动测试不需要真实 GPT-SoVITS、参考音频或模型权重。
 
-Reader Core 的浏览器模块测试页位于 `tests/reader_core_test.html`。可从仓库根目录运行 `python -m http.server 8765`，然后在浏览器打开 `http://127.0.0.1:8765/tests/reader_core_test.html`；测试覆盖 TXT 读取、切分与队列状态。
+Reader Core 的浏览器模块测试页位于 `tests/reader_core_test.html`，EPUB 解析测试页位于 `tests/epub_source_test.html`。可从仓库根目录运行 `python -m http.server 8765`，再打开 `http://127.0.0.1:8765/tests/reader_core_test.html` 或 `http://127.0.0.1:8765/tests/epub_source_test.html`。测试覆盖 TXT/EPUB 读取、章节与片段切分、队列状态。
 
 ### 连续阅读真实链路测试
 

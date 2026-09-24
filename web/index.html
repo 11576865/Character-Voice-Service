@@ -22,12 +22,13 @@
 </head>
 <body>
   <h1>Character Voice Service Reader</h1>
-  <p>输入文本或导入 UTF-8 TXT。阅读器按句子和长度切分，播放当前片段时预取下一片段。</p>
+  <p>输入文本，或导入 UTF-8 TXT / EPUB。阅读器按句子和长度切分，播放当前片段时预取下一片段。</p>
 
   <div class="settings">
     <div><label for="voice">角色</label><select id="voice" disabled></select></div>
     <div><label for="speed">速度</label><input id="speed" type="number" min="0.1" step="0.1" value="1.0"></div>
     <div><label for="txtFile">导入 TXT</label><input id="txtFile" type="file" accept=".txt,text/plain"></div>
+    <div><label for="epubFile">导入 EPUB</label><input id="epubFile" type="file" accept=".epub,application/epub+zip"></div>
   </div>
 
   <label for="text">文本</label>
@@ -35,6 +36,8 @@
 
 She opened the book, found her place, and continued reading from the previous evening.</textarea>
   <p id="source">文本来源：手动输入</p>
+  <div id="bookTitle">书名：手动输入</div>
+  <div id="bookAuthor">作者：未提供</div>
 
   <div class="controls">
     <button id="start" disabled>开始</button>
