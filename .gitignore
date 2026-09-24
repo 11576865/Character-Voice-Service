@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Generated audio / cache
+output/
+cache/
+*.wav
+*.flac
+*.mp3
+
+# Local voice assets and private configs
+references/*
+!references/.gitkeep
+voices/*.local.json
+voices/default.json
+
+# Model weights
+*.pth
+*.ckpt
+*.onnx
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
