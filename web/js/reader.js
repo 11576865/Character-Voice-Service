@@ -5,6 +5,8 @@ import { AudioPlayer } from "./player.js";
 import { ReaderQueue } from "./queue.js";
 
 const voiceSelect = document.getElementById("voice");
+const modelSelect = document.getElementById("modelId");
+const referenceSelect = document.getElementById("referenceId");
 const speedInput = document.getElementById("speed");
 const textInput = document.getElementById("text");
 const fileInput = document.getElementById("txtFile");
@@ -23,13 +25,21 @@ let importedDocument = null;
 let sourceMessage = "手动输入";
 let bookMetadata = { title: "手动输入", author: "" };
 let importInProgress = false;
+let voiceCatalog = new Map();
 
-async function requestAudio({ segment, voice, speed, signal }) {
+async function requestAudio({ segment, voice, modelId, referenceId, speed, signal }) {
   const response = await fetch("/v1/audio/speech", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     signal,
-    body: JSON.stringify({ voice, input: segment.text, response_format: "wav", speed })
+    body: JSON.stringify({
+      voice,
+      model_id: modelId || null,
+      reference_id: referenceId || null,
+      input: segment.text,
+      response_format: "wav",
+      speed
+    })
   });
   if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
   const contentType = response.headers.get("content-type") || "";
@@ -53,6 +63,8 @@ function render(snapshot = queue.snapshot) {
   pauseButton.disabled = snapshot.state !== "playing";
   stopButton.disabled = !active;
   voiceSelect.disabled = active || !voiceSelect.value || importInProgress;
+  modelSelect.disabled = active || !modelSelect.options.length || importInProgress;
+  referenceSelect.disabled = active || !referenceSelect.options.length || importInProgress;
   speedInput.disabled = active || importInProgress;
   textInput.disabled = active || importInProgress;
   fileInput.disabled = active || importInProgress;
@@ -76,14 +88,57 @@ function render(snapshot = queue.snapshot) {
   bookAuthorBox.textContent = `作者：${bookMetadata.author || "未提供"}`;
 }
 
+function fillAssetSelect(select, items, defaultId, labelBuilder) {
+  select.innerHTML = "";
+  for (const item of items || []) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = labelBuilder(item);
+    select.appendChild(option);
+  }
+  if (defaultId && [...select.options].some(option => option.value === defaultId)) {
+    select.value = defaultId;
+  }
+}
+
+function syncCharacterAssets() {
+  const voice = voiceCatalog.get(voiceSelect.value);
+  if (!voice) {
+    modelSelect.innerHTML = "";
+    referenceSelect.innerHTML = "";
+    return;
+  }
+
+  fillAssetSelect(
+    modelSelect,
+    voice.models,
+    voice.default_model,
+    item => [item.name || item.id, item.version].filter(Boolean).join(" · ")
+  );
+  fillAssetSelect(
+    referenceSelect,
+    voice.references,
+    voice.default_reference,
+    item => {
+      const details = [item.emotion, item.intensity === null || item.intensity === undefined ? "" : item.intensity]
+        .filter(value => value !== "");
+      return details.length
+        ? `${item.name || item.id} · ${details.join(" · ")}`
+        : (item.name || item.id);
+    }
+  );
+}
+
 async function loadVoices() {
   try {
     const response = await fetch("/v1/voices");
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     voiceSelect.innerHTML = "";
+    voiceCatalog = new Map();
     for (const voice of data.voices || []) {
       if (voice.error) continue;
+      voiceCatalog.set(voice.id, voice);
       const option = document.createElement("option");
       option.value = voice.id;
       option.textContent = voice.name || voice.id;
@@ -93,6 +148,7 @@ async function loadVoices() {
       statusBox.textContent = "没有可用角色，请先在 voices/ 中添加配置。";
       return;
     }
+    syncCharacterAssets();
     render();
   } catch (error) {
     statusBox.textContent = `无法读取角色列表：${error}`;
@@ -165,11 +221,21 @@ async function startOrResume() {
     const document = importedDocument || documentFromManual(textInput.value);
     const segments = segmentDocument(document);
     if (!segments.length) throw new Error("请输入或导入有内容的文本。");
-    await queue.start(segments, { voice: voiceSelect.value, speed });
+    await queue.start(segments, {
+      voice: voiceSelect.value,
+      modelId: modelSelect.value || null,
+      referenceId: referenceSelect.value || null,
+      speed
+    });
   } catch (error) {
     statusBox.textContent = error.message;
   }
 }
+
+voiceSelect.addEventListener("change", () => {
+  syncCharacterAssets();
+  render();
+});
 
 textInput.addEventListener("input", () => {
   importedDocument = null;
