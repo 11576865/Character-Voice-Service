@@ -1,9 +1,29 @@
 {
+  "schema_version": 2,
   "name": "Example Character",
-  "reference_audio": "C:/path/to/reference.wav",
-  "reference_text": "The exact sentence spoken in the reference audio.",
-  "reference_language": "en",
   "target_language": "en",
+  "default_model": "v2pro-main",
+  "models": {
+    "v2pro-main": {
+      "name": "Main v2Pro model",
+      "engine": "gpt-sovits",
+      "version": "v2pro",
+      "gpt_weights": "C:/path/to/example-e15.ckpt",
+      "sovits_weights": "C:/path/to/example_e8_s96.pth"
+    }
+  },
+  "default_reference": "default",
+  "references": {
+    "default": {
+      "name": "Default reference",
+      "audio": "C:/path/to/reference.wav",
+      "text": "The exact sentence spoken in the reference audio.",
+      "language": "en",
+      "emotion": "neutral",
+      "intensity": 0.5,
+      "quality": "good"
+    }
+  },
   "parameters": {
     "top_k": 15,
     "top_p": 1.0,
