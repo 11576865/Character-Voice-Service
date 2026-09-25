@@ -4,7 +4,7 @@ const VERSION = 1;
 // Two independent 32-bit rolling hashes keep IDs stable on HTTP LAN pages,
 // where Web Crypto's subtle API may be unavailable.
 export function documentIdForFile(buffer, kind) {
-  if (!(buffer instanceof ArrayBuffer) || !["txt", "epub"].includes(kind)) {
+  if (!(buffer instanceof ArrayBuffer) || !["txt", "epub", "md", "docx"].includes(kind)) {
     throw new Error("无法为此文件生成文档 ID。");
   }
   const bytes = new Uint8Array(buffer);

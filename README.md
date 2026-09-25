@@ -23,6 +23,8 @@ Reader / 后续其他客户端
 - 一个角色可以注册多个 GPT-SoVITS 模型版本；
 - 一个角色可以注册多个参考语音；
 - 请求可显式选择 `model_id` 与 `reference_id`；
+- `scripts/import_reference_pack.cmd` 可将 HSR Reference Pack 的音频、文本和情绪标签导入一个已存在的 v2 角色；重复运行按原始语音身份更新。
+- `reference_id: "auto"` 可试用保守的文本情绪选参考；默认仍为角色注册表中的参考。
 - 未指定时使用角色默认模型与默认参考语音；
 - 注册了 `.ckpt/.pth` 路径的模型可自动调用 GPT-SoVITS 官方权重切换接口；
 - 旧版“单模型 + 单参考语音”配置继续兼容；
@@ -32,7 +34,7 @@ Reader / 后续其他客户端
 
 ### Reader
 
-`/test` 已支持：
+首页 `/` 和兼容入口 `/test` 支持：
 
 - 手动文本；
 - UTF-8 TXT；
@@ -46,6 +48,26 @@ Reader / 后续其他客户端
 - 上一/下一段；
 - 当前段落高亮与正文跟随；
 - 角色、模型、参考语音选择。
+- 当前段落重新生成，并在此浏览器保存至多七个可比较的段落版本。
+
+导入前先在 `voices/` 创建真实角色配置，并登记至少一个模型和默认参考。双击 `scripts/import_reference_pack.cmd`，输入 Reference Pack 文件夹及角色 ID。导入内容写入本机 `references/` 和该角色 JSON；两处都被 Git 忽略。仓库不附带真实模型或角色语音。
+
+### 私人书库与成品
+
+- 首页可将当前 TXT、EPUB 或文档保存到电脑书库；书籍、原文件、生成音频及任务状态保存在 `data/`，不会进入 Git。
+- 先在书库登录，再用“整本书一键生成”。任务逐段落盘；中断后再次启动会复用配置、文本均未变化的已完成片段。
+- 旁白用顶部角色，点选正文段落可指定其他角色和参考语音。明确的“角色名：”前缀可生成待确认的角色建议。
+- Markdown、DOCX 文档配音提取标题和正文；可试听所选文字，整篇生成后导出 WAV。
+- 完整生成的书可下载到当前设备离线听读，也可导出 EPUB 3 Media Overlays 同步成品。手机断网、电脑关闭后只能播放已经下载的音频。
+- 浏览器离线数据可能被清理；同步 EPUB 是独立备份。整书导出使用 ffmpeg 转换 MP3，需让 `ffmpeg` 可在命令行找到。
+- `data/admin-token.txt` 会在首次启动时自动生成。双击 `scripts/show_library_token.cmd` 可在本机查看，并在网页书库面板登录；也可用 `CVS_ADMIN_TOKEN` 环境变量覆盖。登录会话为七天。整书任务、私人书库及参考 WAV 试听都需要登录。
+- 新增的 `/epub-prototype` 是独立的 foliate-js EPUB 排版映射验证页。正式 Reader 仍使用现有文本视图，直到段落定位和高亮实测通过。
+
+本仓库包含 foliate-js 的固定 Git 子模块。克隆后运行 `git submodule update --init --recursive`，否则 EPUB 组件验证页不可用。组件采用 MIT 许可，许可文本保留在 `vendor/foliate-js/LICENSE`。
+
+### 实测边界
+
+自动情绪参考、长篇连续规划和多角色建议均为可选试用功能，需用真实角色和 [试听验收表](docs/listening-evaluation.md) 判断是否适合默认启用。当前仓库只有示例角色；本机实际模型、手机断网、第三方阅读 App 的 EPUB 兼容性需分别验收。`CVS_SAVE_GENERATED_WAV=1` 可恢复每次实时合成都另存 Music 的旧行为；默认关闭，避免与段落版本及书库音频重复占用空间。
 
 Reader 架构见 [Reader 架构](docs/reader-architecture.md)，进度规则见 [Reader 状态](docs/reader-state.md)，EPUB 解析见 [EPUB Text Source](docs/epub-source.md)。
 
