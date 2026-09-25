@@ -29,13 +29,13 @@ export function documentFromTxt(text, title = "TXT 文档") {
   return { title, chapters };
 }
 
-export async function readTxtFile(file) {
+export async function readTxtFile(file, buffer = null) {
   if (!file || !/\.txt$/i.test(file.name)) {
     throw new Error("请选择 .txt 文件。");
   }
   let text;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+    text = new TextDecoder("utf-8", { fatal: true }).decode(buffer || await file.arrayBuffer());
   } catch (error) {
     throw new Error("TXT 文件必须使用 UTF-8 编码。", { cause: error });
   }

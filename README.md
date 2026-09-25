@@ -6,11 +6,11 @@
 
 完整目标是：让 Android 手机通过系统 TTS，稳定地让一个 GPT-SoVITS 角色连续朗读 20 段文字。
 
-浏览器页面已扩展为 Reader Core 原型，支持手动文本、UTF-8 TXT 和 EPUB，保留章节与片段切分、连续播放及单段预取。系统 TTS 的 Android 验收仍需在后续阶段完成。
+浏览器页面已扩展为基础 Reader，支持手动文本、UTF-8 TXT 和 EPUB、章节与片段切分、连续播放、单段预取及本地阅读进度。系统 TTS 的 Android 验收仍需在后续阶段完成。
 
 ## Milestone 1：Reader Core
 
-`/test` 页面使用独立的文本来源、切分器、队列和播放器模块。手动输入、UTF-8 TXT 和 EPUB 都转换为统一的 `TextDocument`；阅读队列只保留当前音频和一个预取音频。实现边界见 [Reader 架构](docs/reader-architecture.md)，EPUB 解析方式见 [EPUB Text Source](docs/epub-source.md)。
+`/test` 页面使用独立的文本来源、切分器、导航、进度、队列和播放器模块。手动输入、UTF-8 TXT 和 EPUB 都转换为统一的 `TextDocument`；阅读队列只保留当前音频和一个预取音频。实现边界见 [Reader 架构](docs/reader-architecture.md)，进度规则见 [Reader 状态](docs/reader-state.md)，EPUB 解析方式见 [EPUB Text Source](docs/epub-source.md)。
 
 ## 当前架构
 
@@ -64,7 +64,7 @@ Copy-Item .\voices\example.json .\voices\march-7th.json
 
 首次设置的 `.cmd` 入口会以仅对当前进程生效的方式调用 PowerShell，因此不需要修改系统执行策略；日常启动入口会直接使用项目 `.venv`。
 
-浏览器 Reader 地址：`http://127.0.0.1:9881/test`。同一可信局域网内的手机可访问 `http://<电脑局域网IP>:9881/test`。在页面中输入文本，或导入 UTF-8 TXT / EPUB，选择角色后点击“开始”。TXT 会识别独立成段的章节标题；EPUB 显示书名、作者并按 spine 顺序阅读章节。“暂停/继续”保留当前播放位置，“停止”会取消请求并重置阅读队列。
+浏览器 Reader 地址：`http://127.0.0.1:9881/test`。同一可信局域网内的手机可访问 `http://<电脑局域网IP>:9881/test`。导入 UTF-8 TXT / EPUB，或在折叠区粘贴文本并点击“使用粘贴文本”；选择角色后点击“开始”。TXT 会识别独立成段的章节标题；EPUB 显示书名、作者并按 spine 顺序阅读章节。页面提供章节列表、上一/下一章、上一/下一段，以及高亮和正文跟随。暂停、停止都会保留当前位置；停止会取消请求并清空预取，随后可继续阅读。再次选择同一个 TXT/EPUB 时，可选择“继续阅读”或“从头开始”。进度仅保存在当前浏览器的 localStorage；手动粘贴文本不做跨刷新恢复。
 
 ## API 示例
 
@@ -90,7 +90,7 @@ Copy-Item .\voices\example.json .\voices\march-7th.json
 
 自动测试不需要真实 GPT-SoVITS、参考音频或模型权重。
 
-Reader Core 的浏览器模块测试页位于 `tests/reader_core_test.html`，EPUB 解析测试页位于 `tests/epub_source_test.html`。可从仓库根目录运行 `python -m http.server 8765`，再打开 `http://127.0.0.1:8765/tests/reader_core_test.html` 或 `http://127.0.0.1:8765/tests/epub_source_test.html`。测试覆盖 TXT/EPUB 读取、章节与片段切分、队列状态。
+Reader Core、EPUB 解析及阅读状态的浏览器模块测试页分别位于 `tests/reader_core_test.html`、`tests/epub_source_test.html` 和 `tests/reader_state_test.html`。可从仓库根目录运行 `python -m http.server 8765`，再打开相应的 `http://127.0.0.1:8765/tests/<测试页文件名>`。测试覆盖 TXT/EPUB 读取、章节与片段切分、队列状态、进度恢复和跳转清理。
 
 ### 连续阅读真实链路测试
 

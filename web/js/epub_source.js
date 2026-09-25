@@ -231,8 +231,8 @@ export async function parseEpub(buffer, fallbackTitle = "EPUB 文档") {
   };
 }
 
-export async function readEpubFile(file) {
+export async function readEpubFile(file, buffer = null) {
   if (!file || !/\.epub$/i.test(file.name)) throw new Error("请选择 .epub 文件。");
   if (file.size > MAX_ARCHIVE_BYTES) throw new Error("EPUB 文件超过 100 MB。 ");
-  return parseEpub(await file.arrayBuffer(), file.name.replace(/\.epub$/i, ""));
+  return parseEpub(buffer || await file.arrayBuffer(), file.name.replace(/\.epub$/i, ""));
 }

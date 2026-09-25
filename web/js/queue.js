@@ -39,6 +39,8 @@ export class ReaderQueue {
 
   #reset() {
     this.session += 1;
+    // Suppress timeupdate/ended callbacks from the audio being discarded.
+    this.state = "idle";
     for (const controller of this.requests) controller.abort();
     this.requests.clear();
     this.player.stop();
@@ -78,11 +80,11 @@ export class ReaderQueue {
       .catch(error => ({ index: nextIndex, error }));
   }
 
-  async #play(blob, session) {
+  async #play(blob, session, audioTime = 0) {
     if (session !== this.session) return;
     this.#setState("playing");
     try {
-      await this.player.play(blob);
+      await this.player.play(blob, audioTime);
     } catch (error) {
       if (session === this.session) this.#fail(error);
       return;
@@ -97,19 +99,23 @@ export class ReaderQueue {
     this.#setState("stopped", error);
   }
 
-  async start(segments, { voice, speed = 1 }) {
+  async start(segments, { voice, speed = 1, startIndex = 0, audioTime = 0 }) {
     if (!Array.isArray(segments) || segments.length === 0) throw new Error("没有可朗读的片段。");
     if (!voice) throw new Error("请选择角色。");
     if (!Number.isFinite(speed) || speed <= 0) throw new Error("速度必须大于 0。");
+    if (!Number.isInteger(startIndex) || startIndex < 0 || startIndex >= segments.length) {
+      throw new Error("起始片段越界。");
+    }
     this.#reset();
     this.segments = segments;
+    this.index = startIndex;
     this.voice = voice;
     this.speed = speed;
     const session = this.session;
     this.#setState("generating");
     try {
-      const blob = await this.#fetch(0, session);
-      if (session === this.session && blob) await this.#play(blob, session);
+      const blob = await this.#fetch(startIndex, session);
+      if (session === this.session && blob) await this.#play(blob, session, audioTime);
     } catch (error) {
       if (session === this.session) this.#fail(error);
     }

@@ -6,49 +6,104 @@
   <title>Character Voice Service Reader</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    body { max-width: 860px; margin: 0 auto; padding: 24px; }
-    textarea, select, input, button { font: inherit; }
-    textarea { width: 100%; min-height: 320px; padding: 12px; box-sizing: border-box; line-height: 1.6; resize: vertical; }
-    label { display: block; margin: 16px 0 6px; font-weight: 600; }
-    .settings, .controls { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
-    .settings > div { min-width: 180px; }
-    .settings label { margin-top: 0; }
-    select, input { padding: 7px; }
-    button { min-width: 96px; padding: 10px 18px; cursor: pointer; }
-    button:disabled { cursor: not-allowed; opacity: 0.55; }
-    #status { min-height: 1.5em; margin-top: 16px; white-space: pre-wrap; }
-    #currentParagraph { margin-top: 12px; padding: 12px; border-left: 4px solid currentColor; white-space: pre-wrap; }
+    * { box-sizing: border-box; }
+    body { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    button, input, select, textarea { font: inherit; }
+    button { padding: 8px 13px; cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    h1 { margin: 0 0 10px; }
+    label { display: block; margin-bottom: 5px; font-weight: 600; }
+    .toolbar, .controls { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
+    .toolbar > div { min-width: 145px; }
+    .toolbar input[type="file"] { max-width: 220px; }
+    .toolbar input[type="number"] { width: 90px; padding: 6px; }
+    select { min-width: 145px; padding: 6px; }
+    #text { width: 100%; min-height: 130px; padding: 10px; resize: vertical; }
+    #bookInfo { display: flex; gap: 8px 20px; flex-wrap: wrap; margin: 12px 0; }
+    #resumePrompt { padding: 12px; border: 1px solid currentColor; margin: 12px 0; }
+    #resumePrompt button { margin: 8px 8px 0 0; }
+    .reader-layout { display: grid; grid-template-columns: minmax(190px, 250px) minmax(0, 1fr); gap: 18px; }
+    #chaptersPanel { border: 1px solid #8886; border-radius: 8px; padding: 12px; max-height: 68vh; overflow: auto; }
+    #chaptersPanel summary { font-weight: 700; cursor: pointer; }
+    #chapterList { display: grid; gap: 5px; margin-top: 12px; }
+    #chapterList button { width: 100%; text-align: left; border: 0; background: transparent; border-radius: 5px; }
+    #chapterList button.active { background: #4a78d44d; font-weight: 700; }
+    #readingPane { border: 1px solid #8886; border-radius: 8px; padding: 18px; height: 68vh; overflow: auto; line-height: 1.8; scroll-behavior: smooth; }
+    #readingPane section { margin-bottom: 36px; }
+    #readingPane h2 { margin-top: 0; }
+    #readingPane p { white-space: pre-wrap; margin: 0 0 1em; }
+    .segment.active { background: #e6b64175; border-radius: 3px; }
+    #status { min-height: 1.5em; white-space: pre-wrap; }
+    #position { font-variant-numeric: tabular-nums; }
+    @media (max-width: 700px) {
+      body { padding: 12px; }
+      .reader-layout { display: block; }
+      #chaptersPanel { max-height: 40vh; margin-bottom: 12px; }
+      #readingPane { height: 60vh; }
+      .controls button { flex: 1 1 auto; }
+    }
   </style>
 </head>
 <body>
-  <h1>Character Voice Service Reader</h1>
-  <p>输入文本，或导入 UTF-8 TXT / EPUB。阅读器按句子和长度切分，播放当前片段时预取下一片段。</p>
+  <header>
+    <h1>Character Voice Service Reader</h1>
+    <p>导入 TXT / EPUB，或直接粘贴文本。阅读位置保存在此浏览器中。</p>
+  </header>
 
-  <div class="settings">
+  <div class="toolbar">
+    <div><label for="txtFile">TXT 文件</label><input id="txtFile" type="file" accept=".txt,text/plain"></div>
+    <div><label for="epubFile">EPUB 文件</label><input id="epubFile" type="file" accept=".epub,application/epub+zip"></div>
     <div><label for="voice">角色</label><select id="voice" disabled></select></div>
     <div><label for="speed">速度</label><input id="speed" type="number" min="0.1" step="0.1" value="1.0"></div>
-    <div><label for="txtFile">导入 TXT</label><input id="txtFile" type="file" accept=".txt,text/plain"></div>
-    <div><label for="epubFile">导入 EPUB</label><input id="epubFile" type="file" accept=".epub,application/epub+zip"></div>
   </div>
 
-  <label for="text">文本</label>
-  <textarea id="text">The morning light reached the windows before the city began to stir.
+  <details id="manualPanel">
+    <summary>手动粘贴文本</summary>
+    <label for="text">文本内容</label>
+    <textarea id="text" placeholder="在这里粘贴文本。空行用于分段。"></textarea>
+    <button id="useManual">使用粘贴文本</button>
+  </details>
 
-She opened the book, found her place, and continued reading from the previous evening.</textarea>
-  <p id="source">文本来源：手动输入</p>
-  <div id="bookTitle">书名：手动输入</div>
-  <div id="bookAuthor">作者：未提供</div>
+  <div id="bookInfo">
+    <span id="source">文本来源：未加载</span>
+    <span id="bookTitle">书名：—</span>
+    <span id="bookAuthor">作者：—</span>
+    <span id="chapterCount">章节：—</span>
+  </div>
+
+  <section id="resumePrompt" hidden aria-label="恢复阅读进度">
+    <div id="resumeText">检测到上次阅读位置。</div>
+    <button id="resumeLast">继续阅读</button>
+    <button id="restartBook">从头开始</button>
+  </section>
 
   <div class="controls">
+    <button id="previousChapter" disabled>上一章</button>
+    <button id="previousSegment" disabled>上一段</button>
     <button id="start" disabled>开始</button>
     <button id="pause" disabled>暂停</button>
     <button id="stop" disabled>停止</button>
+    <button id="nextSegment" disabled>下一段</button>
+    <button id="nextChapter" disabled>下一章</button>
+  </div>
+  <div id="status" role="status" aria-live="polite">正在读取角色列表……</div>
+  <div id="storageNotice" hidden>此浏览器无法使用 localStorage，本次阅读位置不会在刷新后保留。</div>
+  <div id="position">尚未开始阅读</div>
+  <div id="currentChapter">当前章节：—</div>
+
+  <div class="reader-layout">
+    <aside>
+      <details id="chaptersPanel" open>
+        <summary>章节列表</summary>
+        <nav id="chapterList" aria-label="章节导航"></nav>
+      </details>
+    </aside>
+    <main id="readingPane" aria-label="正文阅读区域">
+      <div id="documentBody">请选择 TXT / EPUB，或使用粘贴文本。</div>
+    </main>
   </div>
 
   <audio id="audio" hidden></audio>
-  <div id="status" role="status" aria-live="polite">正在读取角色列表……</div>
-  <div id="currentChapter">当前章节：—</div>
-  <div id="currentParagraph">当前段落：—</div>
   <script type="module" src="/reader-assets/js/reader.js"></script>
 </body>
 </html>
