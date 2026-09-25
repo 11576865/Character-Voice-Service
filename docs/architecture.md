@@ -1,39 +1,142 @@
 # 架构说明
 
-## Milestone 0 目标
+## 项目定位
 
-完整的 Milestone 0 验收目标是：让 Android 手机通过系统 TTS，稳定地让一个 GPT-SoVITS 角色连续朗读 20 段文字。
+Character Voice Service 是角色语音资产与客户端之间的服务层。它不再假定“一个服务只有一个角色、一个模型、一个参考音频”。
 
-浏览器测试页只用于验证局域网 HTTP 请求和 WAV 返回链路，不是 Milestone 0 的最终验收。
-
-## 当前边界
-
-Character Voice Service 是 GPT-SoVITS 与客户端之间的适配层：
+当前职责：
 
 ```text
-Android 系统 TTS / 浏览器测试页
-  ↓ HTTP
+训练好的 GPT-SoVITS 模型
+        +
+Reference Library
+        ↓
+Character Registry
+        ↓
 Character Voice Service
-  ↓ localhost HTTP
-GPT-SoVITS
+        ↓
+Reader / 后续 Android TTS / 其他客户端
+```
+
+## 角色资产边界
+
+一个角色由稳定 character ID 标识，例如：
+
+```text
+march-7th
+```
+
+角色可以拥有多个模型版本与多个参考语音：
+
+```text
+March 7th
+├── models
+│   ├── self-400-v2pro
+│   └── downloaded-v2pro
+└── references
+    ├── neutral-01
+    ├── surprised-01
+    └── ...
+```
+
+模型权重与参考 WAV 保留在用户本机原位置。Character Voice Service 只在本地角色配置中注册路径，不复制模型资产进仓库。
+
+详细 schema 见 [Character Registry](character-registry.md)。
+
+## 服务调用
+
+```text
+Reader
+  ↓ POST /v1/audio/speech
+Character Voice Service :9881
+  ↓ 解析 character / model / reference
+Character Registry
+  ↓
+GPT-SoVITS :9880
   ↓
 WAV
 ```
 
-服务层负责稳定 API、单角色配置解析、参数映射和错误转换。当前保持单角色、单语言约束。缓存、流式传输、多角色自动路由、情绪、LLM 和 EPUB 均不属于本阶段。
+请求至少需要：
 
-## 角色标识约定
+```json
+{
+  "voice": "march-7th",
+  "input": "Hello."
+}
+```
 
-- `voices/example.json` 只是模板，不是可用角色。
-- 真实配置使用稳定的 voice ID 作为文件名，例如 `voices/march-7th.json`。
-- API 的 `voice` 参数使用文件名 stem，例如 `march-7th`。
-- JSON 中的 `name` 只用于用户界面显示，例如 `March 7th`。
-- Milestone 0 仍只要求配置和使用一个真实角色。
+可选显式指定：
+
+```json
+{
+  "voice": "march-7th",
+  "model_id": "self-400-v2pro",
+  "reference_id": "surprised-01",
+  "input": "Hello."
+}
+```
+
+若未指定，则使用角色的默认模型与默认参考语音。
+
+## GPT-SoVITS 模型切换
+
+注册了 `gpt_weights` 与 `sovits_weights` 的模型由 Service 管理。
+
+切换流程：
+
+```text
+选择 model_id
+    ↓
+如果已是当前模型 → 不重载
+    ↓
+否则：
+GET /set_sovits_weights
+GET /set_gpt_weights
+    ↓
+POST /tts
+```
+
+由于一个 GPT-SoVITS 进程只有一组活动权重，模型切换和语音合成在 Service 内串行保护，避免并发请求交叉到错误模型。
+
+旧版 profile 继续兼容。旧版模型被视为“外部已加载”；在 Service 已主动切换到受管理模型后，不会静默回到无法确定权重路径的外部模型。
+
+## Reader
+
+Reader 已支持：
+
+- 手动文本；
+- UTF-8 TXT；
+- EPUB；
+- 章节与片段切分；
+- 单段预取；
+- 阅读进度；
+- 章节/段落跳转；
+- 当前段高亮；
+- 角色、模型、参考语音选择。
+
+Reader 不读取本机 `.ckpt/.pth` 路径；它只使用 Character Registry 暴露的安全 ID。
+
+## 后续情绪层
+
+当前只支持显式 reference 选择。后续层次：
+
+```text
+Reference Library
+        ↓
+Emotion Router
+        ↓
+Continuity Planner
+        ↓
+Reader Queue
+```
+
+Reader 负责判断“这段文字应该是什么情绪”；Character Voice Service 负责将 `character + emotion + intensity` 落到该角色可用的参考语音。自动情绪路由要等真实 Reference Pack 的听感实验确认后再实现。
 
 ## 安全边界
 
 - GPT-SoVITS 仅监听 `127.0.0.1:9880`。
 - Character Voice Service 按需监听 `0.0.0.0:9881`，仅用于可信局域网。
-- 不配置路由器端口转发。
-- 校园网、公共 Wi-Fi 或不可信网络不应直接暴露此端口。
-- 后续远程访问应优先考虑受控 VPN 或 overlay network。
+- `GET /v1/voices` 不返回本机模型路径、参考 WAV 路径或参考逐字文本。
+- 真实角色配置被 Git 忽略。
+- 当前不提供公网认证、用户账户或多租户隔离。
