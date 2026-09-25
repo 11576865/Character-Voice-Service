@@ -8,7 +8,8 @@ import { ReaderNavigation, chapterStart, chapterPosition } from "./navigation.js
 
 const element = id => document.getElementById(id);
 const ui = {
-  voice: element("voice"), speed: element("speed"), text: element("text"),
+  voice: element("voice"), modelId: element("modelId"), referenceId: element("referenceId"),
+  speed: element("speed"), text: element("text"),
   txtFile: element("txtFile"), epubFile: element("epubFile"),
   manualPanel: element("manualPanel"),
   useManual: element("useManual"), start: element("start"), pause: element("pause"), stop: element("stop"),
@@ -40,15 +41,23 @@ let highlightedIndex = -1;
 let forceScrollIndex = -1;
 let userScrollUntil = 0;
 let jumpSavedIndex = -1;
+let voiceCatalog = new Map();
 const segmentNodes = new Map();
 const chapterButtons = [];
 
-async function requestAudio({ segment, voice, speed, signal }) {
+async function requestAudio({ segment, voice, modelId, referenceId, speed, signal }) {
   const response = await fetch("/v1/audio/speech", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     signal,
-    body: JSON.stringify({ voice, input: segment.text, response_format: "wav", speed })
+    body: JSON.stringify({
+      voice,
+      model_id: modelId || null,
+      reference_id: referenceId || null,
+      input: segment.text,
+      response_format: "wav",
+      speed
+    })
   });
   if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
   const contentType = response.headers.get("content-type") || "";
@@ -72,7 +81,12 @@ function playbackOptions() {
   const speed = Number(ui.speed.value);
   if (!ui.voice.value) throw new Error("请选择角色。");
   if (!Number.isFinite(speed) || speed <= 0) throw new Error("速度必须大于 0。");
-  return { voice: ui.voice.value, speed };
+  return {
+    voice: ui.voice.value,
+    modelId: ui.modelId.value || null,
+    referenceId: ui.referenceId.value || null,
+    speed
+  };
 }
 
 function activePosition() {
@@ -202,6 +216,8 @@ function render(snapshot = queue.snapshot) {
   ui.pause.disabled = snapshot.state !== "playing";
   ui.stop.disabled = !active;
   ui.voice.disabled = active || loading || !ui.voice.value;
+  ui.modelId.disabled = active || loading || !ui.modelId.options.length;
+  ui.referenceId.disabled = active || loading || !ui.referenceId.options.length;
   ui.speed.disabled = active || loading;
   ui.useManual.disabled = loading;
   ui.previousSegment.disabled = !hasDocument || loading || awaitingChoice || index <= 0;
@@ -357,20 +373,69 @@ function chooseProgress(continueReading) {
   jump(() => navigation.jumpToSegment(position.index, position.audioTime));
 }
 
+function fillAssetSelect(select, items, defaultId, labelBuilder) {
+  select.replaceChildren();
+  for (const item of items || []) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = labelBuilder(item);
+    select.appendChild(option);
+  }
+  if (defaultId && [...select.options].some(option => option.value === defaultId)) {
+    select.value = defaultId;
+  }
+}
+
+function syncCharacterAssets() {
+  const voice = voiceCatalog.get(ui.voice.value);
+  if (!voice) {
+    ui.modelId.replaceChildren();
+    ui.referenceId.replaceChildren();
+    return;
+  }
+  fillAssetSelect(
+    ui.modelId,
+    voice.models,
+    voice.default_model,
+    item => [item.name || item.id, item.version].filter(Boolean).join(" · ")
+  );
+  fillAssetSelect(
+    ui.referenceId,
+    voice.references,
+    voice.default_reference,
+    item => {
+      const details = [
+        item.emotion,
+        item.intensity === null || item.intensity === undefined ? "" : item.intensity
+      ].filter(value => value !== "");
+      return details.length
+        ? `${item.name || item.id} · ${details.join(" · ")}`
+        : (item.name || item.id);
+    }
+  );
+}
+
 async function loadVoices() {
   try {
     const response = await fetch("/v1/voices");
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     ui.voice.replaceChildren();
+    voiceCatalog = new Map();
     for (const voice of data.voices || []) {
       if (voice.error) continue;
+      voiceCatalog.set(voice.id, voice);
       const option = document.createElement("option");
       option.value = voice.id;
       option.textContent = voice.name || voice.id;
       ui.voice.appendChild(option);
     }
-    if (!ui.voice.options.length) statusOverride = "没有可用角色，请先在 voices/ 中添加配置。";
+    if (!ui.voice.options.length) {
+      syncCharacterAssets();
+      statusOverride = "没有可用角色，请先在 voices/ 中添加配置。";
+    } else {
+      syncCharacterAssets();
+    }
     render();
   } catch (error) {
     statusOverride = `无法读取角色列表：${error}`;
@@ -378,6 +443,10 @@ async function loadVoices() {
   }
 }
 
+ui.voice.addEventListener("change", () => {
+  syncCharacterAssets();
+  render();
+});
 ui.readingPane.addEventListener("wheel", () => { userScrollUntil = Date.now() + 8000; }, { passive: true });
 ui.readingPane.addEventListener("touchstart", () => { userScrollUntil = Date.now() + 8000; }, { passive: true });
 ui.readingPane.addEventListener("pointerdown", () => { userScrollUntil = Date.now() + 8000; });
