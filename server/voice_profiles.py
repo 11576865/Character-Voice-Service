@@ -241,6 +241,7 @@ def public_profile_summary(voice_id: str, profile: dict) -> dict:
         "id": voice_id,
         "name": profile["name"],
         "schema_version": profile["schema_version"],
+        "reference_language": profile["references"][profile["default_reference"]]["language"],
         "target_language": profile["target_language"],
         "default_model": profile["default_model"],
         "models": [
