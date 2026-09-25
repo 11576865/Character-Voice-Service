@@ -10,6 +10,8 @@ export class ReaderQueue {
     this.nextAudio = null;
     this.prefetchPromise = null;
     this.voice = null;
+    this.modelId = null;
+    this.referenceId = null;
     this.speed = 1;
     this.state = "idle";
     this.error = null;
@@ -56,6 +58,8 @@ export class ReaderQueue {
       const blob = await this.requestAudio({
         segment: this.segments[index],
         voice: this.voice,
+        modelId: this.modelId,
+        referenceId: this.referenceId,
         speed: this.speed,
         signal: controller.signal
       });
@@ -97,13 +101,15 @@ export class ReaderQueue {
     this.#setState("stopped", error);
   }
 
-  async start(segments, { voice, speed = 1 }) {
+  async start(segments, { voice, modelId = null, referenceId = null, speed = 1 }) {
     if (!Array.isArray(segments) || segments.length === 0) throw new Error("没有可朗读的片段。");
     if (!voice) throw new Error("请选择角色。");
     if (!Number.isFinite(speed) || speed <= 0) throw new Error("速度必须大于 0。");
     this.#reset();
     this.segments = segments;
     this.voice = voice;
+    this.modelId = modelId || null;
+    this.referenceId = referenceId || null;
     this.speed = speed;
     const session = this.session;
     this.#setState("generating");
