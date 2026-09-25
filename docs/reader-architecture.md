@@ -36,7 +36,22 @@
 
 ## API 关系
 
-Reader 调用现有 `GET /v1/voices` 获取角色，再以 `{ voice, input, response_format: "wav", speed }` 调用 `POST /v1/audio/speech`。服务层通过 `/test` 返回页面，通过 `/reader-assets/` 提供 ES 模块静态资源。语音 API 的路径及请求、响应格式没有变化。
+Reader 调用 `GET /v1/voices` 获取角色及其公开的模型/参考语音元数据。界面只持有稳定 ID，不接触本机权重路径或参考音频路径。
+
+请求示例：
+
+```json
+{
+  "voice": "march-7th",
+  "model_id": "self-400-v2pro",
+  "reference_id": "surprised-01",
+  "input": "Hello.",
+  "response_format": "wav",
+  "speed": 1.0
+}
+```
+
+`model_id` 与 `reference_id` 可省略，此时由 Character Registry 使用角色默认值。ReaderQueue 会把当前角色、模型和参考语音选择固定在一次播放会话中，并把同一选择带到预取请求。服务层通过 `/test` 返回页面，通过 `/reader-assets/` 提供 ES 模块静态资源。
 
 ## EPUB 接入
 

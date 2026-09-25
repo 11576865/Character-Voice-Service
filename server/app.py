@@ -20,7 +20,12 @@ from server.config import (
     VOICE_DIR,
     WEB_DIR,
 )
-from server.voice_profiles import iter_real_profile_paths, read_valid_profile
+from server.voice_profiles import (
+    iter_real_profile_paths,
+    public_profile_summary,
+    read_valid_profile,
+    resolve_profile_selection,
+)
 
 
 app = FastAPI(
@@ -33,6 +38,8 @@ app.mount("/reader-assets", StaticFiles(directory=WEB_DIR), name="reader-assets"
 class SpeechRequest(BaseModel):
     model: str = "gpt-sovits"
     voice: str
+    model_id: str | None = None
+    reference_id: str | None = None
     input: str
     response_format: str = "wav"
     speed: float = 1.0
@@ -119,14 +126,7 @@ def voices():
     for path in iter_real_profile_paths(VOICE_DIR):
         try:
             profile = read_valid_profile(path)
-            items.append(
-                {
-                    "id": path.stem,
-                    "name": profile.get("name", path.stem),
-                    "reference_language": profile.get("reference_language"),
-                    "target_language": profile.get("target_language"),
-                }
-            )
+            items.append(public_profile_summary(path.stem, profile))
         except Exception:
             items.append(
                 {
@@ -161,11 +161,23 @@ def speech(request: SpeechRequest):
     if request.speed <= 0:
         raise HTTPException(status_code=400, detail="speed must be greater than 0")
 
+    if request.model != "gpt-sovits":
+        raise HTTPException(status_code=400, detail="current version supports gpt-sovits only")
+
     profile = load_voice_profile(request.voice)
+    try:
+        selection = resolve_profile_selection(
+            profile,
+            model_id=request.model_id,
+            reference_id=request.reference_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+
     audio = synthesize(
         text=request.input,
         speed=request.speed,
-        profile=profile,
+        profile=selection,
     )
 
     saved_path = save_wav(audio)
