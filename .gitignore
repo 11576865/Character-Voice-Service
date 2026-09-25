@@ -4,11 +4,13 @@ __pycache__/
 venv/
 .env
 .pytest-tmp/
+.pytest_cache/
 test-results/
 
 # Generated audio / cache
 output/
 cache/
+data/
 *.wav
 *.flac
 *.mp3

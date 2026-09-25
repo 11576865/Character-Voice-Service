@@ -69,10 +69,11 @@ def write_registry_profile(directory, voice_id="march-7th", display_name="March 
 
 
 def test_root_lists_public_endpoints():
-    response = client.get("/")
+    response = client.get("/v1")
     assert response.status_code == 200
     assert response.json()["health"] == "/health"
     assert response.json()["voices"] == "/v1/voices"
+    assert "Character Voice Service" in client.get("/").text
 
 
 def test_reader_modules_are_served():
@@ -157,12 +158,30 @@ def test_speech_resolves_requested_model_and_reference(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/wav"
     assert response.content == wav
+    assert response.headers["x-selected-reference"] == "surprised"
     selection = calls[0]["profile"]
     assert calls[0]["text"] == "Hello"
     assert calls[0]["speed"] == 1.25
     assert selection["selected_model"]["id"] == "downloaded"
     assert selection["selected_reference"]["id"] == "surprised"
     assert selection["reference_audio"] == "D:/refs/surprised.wav"
+
+
+def test_auto_reference_uses_cue_and_falls_back(tmp_path, monkeypatch):
+    write_registry_profile(tmp_path)
+    monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "SAVE_GENERATED_WAV", False)
+    calls = []
+    monkeypatch.setattr(app_module, "synthesize", lambda **kw: calls.append(kw) or b"RIFF....WAVE")
+    chosen = client.post("/v1/audio/speech", json={
+        "voice": "march-7th", "reference_id": "auto", "input": "She was surprised!"
+    })
+    fallback = client.post("/v1/audio/speech", json={
+        "voice": "march-7th", "reference_id": "auto", "input": "She walked ahead."
+    })
+    assert chosen.headers["x-selected-reference"] == "surprised"
+    assert fallback.headers["x-selected-reference"] == "neutral"
+    assert calls[0]["profile"]["selected_reference"]["id"] == "surprised"
 
 
 def test_speech_legacy_profile_still_works(tmp_path, monkeypatch):
