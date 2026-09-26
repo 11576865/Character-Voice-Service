@@ -214,7 +214,8 @@ export async function parseEpub(buffer, fallbackTitle = "EPUB 文档") {
   const spine = descendants(packageXml, "spine")[0];
   if (!spine) throw new Error("EPUB 缺少阅读顺序 spine。");
   const chapters = [];
-  for (const reference of descendants(spine, "itemref")) {
+  const chapterSources = [];
+  for (const [spineIndex, reference] of descendants(spine, "itemref").entries()) {
     if (reference.getAttribute("linear") === "no") continue;
     const item = manifest.get(reference.getAttribute("idref"));
     if (!item || !item.href) throw new Error("EPUB spine 引用了缺失资源。");
@@ -222,12 +223,15 @@ export async function parseEpub(buffer, fallbackTitle = "EPUB 文档") {
     const xhtmlPath = resolveHref(packagePath, item.href);
     const xhtml = parseXml(await archive.readText(xhtmlPath), xhtmlPath, "application/xhtml+xml");
     const chapter = chapterFromXhtml(xhtml, item.href.split("/").at(-1));
-    if (chapter) chapters.push(chapter);
+    if (chapter) {
+      chapters.push(chapter);
+      chapterSources.push({ path: xhtmlPath, spineIndex });
+    }
   }
   if (!chapters.length) throw new Error("EPUB 没有可朗读的 XHTML 正文。");
   return {
     document: { title, chapters },
-    metadata: { title, author }
+    metadata: { title, author, chapterSources }
   };
 }
 

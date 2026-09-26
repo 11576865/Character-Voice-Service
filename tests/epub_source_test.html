@@ -94,6 +94,8 @@ try {
   assert(Object.keys(parsed.document).join(",") === "title,chapters", "TextDocument shape");
   assert(parsed.document.title === "星海纪事", "metadata title");
   assert(parsed.metadata.author === "Test Author", "metadata author");
+  assert(parsed.metadata.chapterSources[0].path === "OEBPS/Text/ch2.xhtml" &&
+    parsed.metadata.chapterSources[0].spineIndex === 0, "chapter source follows spine order");
   assert(parsed.document.chapters.length === 2, "two spine chapters");
   assert(parsed.document.chapters[0].title === "Chapter Two", "spine order, not ZIP order");
   assert(parsed.document.chapters[0].paragraphs.includes("Next chapter."), "deflated XHTML decoded");

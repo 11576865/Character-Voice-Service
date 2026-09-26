@@ -67,7 +67,7 @@ Reader / 后续其他客户端
 - 离线书库显示已下载音频的估计大小和本站点占用；删除本设备副本前会再次确认。
 - 联网后按上次同步时间核对本设备与电脑的阅读位置；只有一端改变时自动同步，两端都改变且位置不同时让用户选择。
 - `data/admin-token.txt` 会在首次启动时自动生成。双击 `scripts/show_library_token.cmd` 可在本机查看，并在网页书库面板登录；也可用 `CVS_ADMIN_TOKEN` 环境变量覆盖。登录会话为七天。整书任务、私人书库及参考 WAV 试听都需要登录。
-- 新增的 `/epub-prototype` 是独立的 foliate-js EPUB 排版映射验证页。正式 Reader 仍使用现有文本视图，直到段落定位和高亮实测通过。
+- `/epub-prototype` 是独立的 foliate-js EPUB 排版映射验证页：可打开本地 EPUB、查看章节路径匹配、尝试目录跳转和逐段定位。若排版内容区未载入，页面会提示超时；正式 Reader 仍使用现有文本视图，直到段落定位和高亮实测通过。
 
 本仓库包含 foliate-js 的固定 Git 子模块。克隆后运行 `git submodule update --init --recursive`，否则 EPUB 组件验证页不可用。组件采用 MIT 许可，许可文本保留在 `vendor/foliate-js/LICENSE`。
 

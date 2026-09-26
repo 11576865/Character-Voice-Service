@@ -4,19 +4,30 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CVS EPUB 排版组件验证</title>
   <style>
-    body { font: 16px system-ui, sans-serif; margin: 24px; }
-    foliate-view { display: block; height: 65vh; border: 1px solid #999; margin-top: 16px; }
-    pre { white-space: pre-wrap; }
+    body { font: 16px system-ui, sans-serif; margin: 24px; color: #e6f6ed; background: #101a19; }
+    button, select, input { font: inherit; margin: 4px; }
+    button, select { background: #19302c; color: #e6f6ed; border: 1px solid #4b8672; border-radius: 6px; padding: 6px 10px; }
+    button:disabled { opacity: .45; }
+    foliate-view { display: block; height: 58vh; border: 1px solid #4b8672; background: #fff; margin-top: 16px; }
+    #paragraphs { display: flex; overflow-x: auto; gap: 4px; padding: 8px 0; }
+    #paragraphs button { flex: 0 0 auto; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #differences { white-space: pre-wrap; color: #ffb5a9; }
+    #location { overflow-wrap: anywhere; font-size: .85em; color: #a9c9bf; }
+    a { color: #8edbbe; }
   </style>
 </head>
 <body>
   <h1>EPUB 排版与段落映射验证</h1>
-  <p>此页面使用已固定版本的 foliate-js 显示 EPUB，并与 CVS 当前文本解析结果比较。段落映射通过前，正式 Reader 保留现有显示方式。</p>
+  <p>选择本地 EPUB，检查目录跳转、CVS 段落顺序及定位高亮。验证通过后才接入正式 Reader。</p>
   <input id="file" type="file" accept=".epub,application/epub+zip">
   <button id="previous">上一页</button><button id="next">下一页</button>
+  <select id="toc" aria-label="EPUB 目录"><option value="">选择目录跳转…</option></select>
   <div id="status" role="status">请选择 EPUB。</div>
+  <div id="location"></div>
   <pre id="differences"></pre>
+  <div id="paragraphs" aria-label="CVS 段落定位"></div>
   <foliate-view id="book"></foliate-view>
-  <script type="module" src="/reader-assets/js/foliate_prototype.js"></script>
+  <p>排版组件：<a href="https://github.com/johnfactotum/foliate-js">foliate-js</a>，MIT 许可。此页仅作组件验证。</p>
+  <script type="module" src="/reader-assets/js/foliate_prototype.js?v=5"></script>
 </body>
 </html>
