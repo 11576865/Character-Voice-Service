@@ -35,6 +35,11 @@ def test_imports_character_folders_and_reimports_without_duplicates(tmp_path):
     assert [item["count"] for item in plan] == [2, 2]
     assert not voices.exists()
     apply_import(plan)
+    wolf_path = voices / "silver-wolf.json"
+    reviewed = json.loads(wolf_path.read_text(encoding="utf-8"))
+    happy_id = next(key for key, ref in reviewed["references"].items() if ref["emotion"] == "happy")
+    reviewed["references"][happy_id]["quality"] = "good"
+    wolf_path.write_text(json.dumps(reviewed, ensure_ascii=False), encoding="utf-8")
     apply_import(plan_import(source, model, voice_dir=voices, reference_dir=refs))
     march = json.loads((voices / "march-7th.json").read_text(encoding="utf-8"))
     wolf = json.loads((voices / "silver-wolf.json").read_text(encoding="utf-8"))
@@ -42,10 +47,19 @@ def test_imports_character_folders_and_reimports_without_duplicates(tmp_path):
     assert len(wolf["references"]) == 2
     assert march["default_reference"] == "default"
     assert wolf["references"][wolf["default_reference"]]["emotion"] == "neutral"
-    assert any(ref["text"] == "How lovely!" and ref["quality"] == "unrated"
+    assert any(ref["text"] == "How lovely!" and ref["quality"] == "good"
                for ref in wolf["references"].values())
     assert march["models"]["v4-local"]["gpt_weights"].endswith("三月七-e10.ckpt")
     assert len(list(refs.rglob("*.wav"))) == 4
+    changed_audio = source / "银狼" / "reference_audios" / "英语" / "emotions" / "【开心】How lovely!.wav"
+    with wave.open(str(changed_audio), "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(16000)
+        stream.writeframes(b"\x01\x00" * 160)
+    changed_plan = plan_import(source, model, voice_dir=voices, reference_dir=refs)
+    changed_wolf = next(item for item in changed_plan if item.get("id") == "silver-wolf")
+    assert changed_wolf["data"]["references"][happy_id]["quality"] == "unrated"
 
 
 def test_missing_old_default_is_replaced_by_imported_neutral(tmp_path):

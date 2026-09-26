@@ -120,14 +120,20 @@ def plan_import(source_root: Path, model_root: Path, *, voice_dir: Path = VOICE_
             emotion = EMOTIONS.get(match.group(1), match.group(1))
             ref_id = "folder-" + hashlib.sha256(str(audio.relative_to(role_dir)).encode("utf-8")).hexdigest()[:12]
             target = reference_dir / role_id / f"{ref_id}.wav"
+            previous = profile["references"].get(ref_id, {})
+            unchanged = (target.is_file() and previous.get("text") == match.group(2).strip()
+                         and hashlib.sha256(audio.read_bytes()).digest()
+                         == hashlib.sha256(target.read_bytes()).digest())
             record = {"name": audio.stem, "audio": str(target.resolve()), "text": match.group(2).strip(),
-                      "language": language, "emotion": emotion, "quality": "unrated",
+                      "language": language, "emotion": emotion,
+                      "quality": previous.get("quality", "unrated") if unchanged else "unrated",
                       "source_project": str(source_root), "source_member_id": str(audio.relative_to(role_dir))}
             refs.append((audio, target, ref_id, record))
             profile["references"][ref_id] = record
         if not profile["default_reference"]:
             neutral = next((ref_id for _, _, ref_id, record in refs if record["emotion"] == "neutral"), None)
-            profile["default_reference"] = neutral or refs[0][2]
+            other = next((ref_id for _, _, ref_id, record in refs if record["emotion"] == "other"), None)
+            profile["default_reference"] = neutral or other or refs[0][2]
         normalize_profile(profile)
         result.append({"role": role_dir.name, "id": role_id, "status": "ready", "count": len(refs),
                        "profile": target_profile, "data": profile, "files": refs})
