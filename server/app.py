@@ -6,6 +6,7 @@ import threading
 import wave
 import urllib.request
 import uuid
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -501,13 +502,15 @@ def select_book_version(book_id: str, segment_id: str, request: SelectionRequest
     return {"selected": request.version_id}
 
 
-def _book_plan(book: dict, settings: dict) -> list[dict]:
+def _book_plan(book: dict, settings: dict,
+               chapter_index: int | None = None) -> Iterator[dict]:
     """Resolve the same paragraph voices and references used by generation."""
     continuity = {"chapter": None, "voice": None, "paragraph": None,
                   "reference": None, "reason": None, "held": False}
     profiles = {}
-    plan = []
     for segment in book["segments"]:
+        if chapter_index is not None and segment["chapterIndex"] != chapter_index:
+            continue
         chapter_index = segment["chapterIndex"]
         paragraph_index = segment["paragraphIndex"]
         paragraph = (chapter_index, paragraph_index)
@@ -548,19 +551,21 @@ def _book_plan(book: dict, settings: dict) -> list[dict]:
         text_to_speak = spoken_text(segment["text"], book.get("pronunciations", {}))
         selection, actual_reference = effective_selection(
             voice, model_id, reference_id, text_to_speak)
-        plan.append({"segment": segment, "paragraph": key, "text": paragraph_text,
-                     "voice": voice, "reference_id": actual_reference,
-                     "model_id": selection["selected_model"]["id"], "reason": reason,
-                     "spoken_text": text_to_speak, "selection": selection})
-    return plan
+        yield {"segment": segment, "paragraph": key, "text": paragraph_text,
+               "voice": voice, "reference_id": actual_reference,
+               "model_id": selection["selected_model"]["id"], "reason": reason,
+               "spoken_text": text_to_speak, "selection": selection}
 
 
 @app.post("/v1/books/{book_id}/plan", dependencies=[Depends(require_admin)])
-def preview_book_plan(book_id: str, request: GenerationRequest):
+def preview_book_plan(book_id: str, request: GenerationRequest,
+                      chapter_index: int | None = None):
     book = get_book_or_404(book_id)
     if request.speed <= 0:
         raise HTTPException(status_code=400, detail="Speed must be positive")
-    plan = _book_plan(book, request.model_dump())
+    if chapter_index is not None and not 0 <= chapter_index < len(book["document"]["chapters"]):
+        raise HTTPException(status_code=400, detail="Invalid chapter index")
+    plan = _book_plan(book, request.model_dump(), chapter_index)
     paragraphs = []
     seen = set()
     for item in plan:

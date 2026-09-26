@@ -1378,13 +1378,13 @@ async function previewBookPlan() {
   try {
     const options = playbackOptions();
     ui.planStatus.textContent = "正在计算本章声音安排……";
-    const response = await libraryFetch(`/v1/books/${currentBookId}/plan`, {
+    const chapter = Number(ui.planChapter.value);
+    const response = await libraryFetch(`/v1/books/${currentBookId}/plan?chapter_index=${chapter}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ voice: options.voice, model_id: options.modelId,
         reference_id: options.referenceId, speed: options.speed,
         continuous_emotion: ui.continuousEmotion.checked })
     });
-    const chapter = Number(ui.planChapter.value);
     const rows = (await response.json()).paragraphs.filter(item =>
       Number(item.paragraph.split(":")[0]) === chapter);
     ui.planRows.replaceChildren();
@@ -1631,5 +1631,5 @@ try {
 loadVoices();
 renderOfflineBooks();
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/service-worker.js?v=10").catch(() => {});
+  navigator.serviceWorker.register("/service-worker.js?v=11").catch(() => {});
 }

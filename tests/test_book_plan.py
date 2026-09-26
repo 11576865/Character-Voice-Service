@@ -44,7 +44,7 @@ def test_chapter_plan_holds_once_and_resets_at_role_change(tmp_path, monkeypatch
     book = _book(BookLibrary(tmp_path))
     settings = {"voice": "a", "reference_id": "auto", "model_id": None,
                 "speed": 1.0, "continuous_emotion": True}
-    plan = app_module._book_plan(book, settings)
+    plan = list(app_module._book_plan(book, settings))
     assert [(item["voice"], item["reference_id"]) for item in plan] == [
         ("a", "a-happy"), ("a", "a-happy"), ("b", "b-neutral"), ("a", "a-neutral")]
     assert plan[1]["reason"].startswith("continuity:")
@@ -67,6 +67,8 @@ def test_preview_is_private_and_other_role_uses_its_own_default(tmp_path, monkey
     assert paragraphs[2]["voice"] == "b"
     assert paragraphs[2]["reference_id"] == "b-neutral"
     assert "selected_model" not in response.text
+    assert client.post(route + "?chapter_index=99", json=settings,
+                       headers={"X-CVS-Token": app_module.ADMIN_TOKEN}).status_code == 400
 
 
 def test_generation_uses_previewed_roles_and_references(tmp_path, monkeypatch):
