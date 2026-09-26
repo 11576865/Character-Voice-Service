@@ -52,7 +52,7 @@ Reader / 后续其他客户端
 
 导入前先在 `voices/` 创建真实角色配置，并登记至少一个模型和默认参考。双击 `scripts/import_reference_pack.cmd`，输入 Reference Pack 文件夹及角色 ID。导入内容写入本机 `references/` 和该角色 JSON；两处都被 Git 忽略。仓库不附带真实模型或角色语音。
 
-如果手里是已有的 `voices/角色名/reference_audios/英语/emotions/【情绪】逐字文本.wav` 目录，使用 `scripts/import_voice_folders.cmd`。第一次输入包含各角色子目录的 `voices` 路径，第二次输入 GPT-SoVITS 根目录（其下应有 `GPT_weights_v4` 与 `SoVITS_weights_v4`）。脚本先预览每个角色及参考数量，确认后才复制 WAV 并登记各自的 v4 模型权重。原目录不会修改；再次运行按文件来源更新，不会增加重复条目。文件名中 `【】` 后的完整内容被当作准确参考文本，导入前请核对。没有 WAV 的角色会跳过；缺少或不唯一的模型权重会明确报错。新参考质量先标为 `unrated`，自动情绪选择不会使用它们，需试听确认后再标记质量。重复导入时，音频和文本未改变的参考保留人工评级；音频或文本改变则恢复 `unrated`。新角色优先用“中立”参考作为默认项，没有时选“其他”。
+如果手里是已有的 `voices/角色名/reference_audios/英语/emotions/【情绪】逐字文本.wav` 目录，使用 `scripts/import_voice_folders.cmd`。第一次输入包含各角色子目录的 `voices` 路径，第二次输入 GPT-SoVITS 根目录（其下应有 `GPT_weights_v4` 与 `SoVITS_weights_v4`）。脚本先预览每个角色及参考数量，确认后才复制 WAV 并登记各自的 v4 模型权重。原目录不会修改；再次运行按文件来源更新，不会增加重复条目。文件名中 `【】` 后的完整内容被当作准确参考文本，导入前请核对。没有 WAV 的角色会跳过；缺少或不唯一的模型权重会明确报错。新参考质量先标为 `unrated`，自动情绪选择不会使用它们，需试听确认后再标记质量。重复导入时，音频和文本未改变的参考保留人工评级；音频或文本改变则恢复 `unrated`。`config/reference_reviews.json` 只记录已确认参考的音频与文本校验值，另一台机器导入相同文件时可恢复评级，校验不匹配则仍为 `unrated`。新角色优先用“中立”参考作为默认项，没有时选“其他”。
 
 ### 私人书库与成品
 

@@ -63,12 +63,15 @@ def _existing_profile(source_root: Path, target: Path) -> dict | None:
 
 
 def plan_import(source_root: Path, model_root: Path, *, voice_dir: Path = VOICE_DIR,
-                reference_dir: Path = PROJECT_ROOT / "references", role_ids: dict[str, str] | None = None) -> list[dict]:
+                reference_dir: Path = PROJECT_ROOT / "references", role_ids: dict[str, str] | None = None,
+                reviews_path: Path | None = PROJECT_ROOT / "config" / "reference_reviews.json") -> list[dict]:
     source_root = source_root.resolve(strict=True)
     model_root = model_root.resolve(strict=True)
     if not source_root.is_dir() or not model_root.is_dir():
         raise ValueError("Source voices and model root must be directories")
     role_ids = role_ids or {}
+    reviews = json.loads(reviews_path.read_text(encoding="utf-8")).get("reviews", {}) \
+        if reviews_path and reviews_path.is_file() else {}
     result = []
     used_ids = set()
     for role_dir in sorted(source_root.iterdir()):
@@ -121,12 +124,18 @@ def plan_import(source_root: Path, model_root: Path, *, voice_dir: Path = VOICE_
             ref_id = "folder-" + hashlib.sha256(str(audio.relative_to(role_dir)).encode("utf-8")).hexdigest()[:12]
             target = reference_dir / role_id / f"{ref_id}.wav"
             previous = profile["references"].get(ref_id, {})
+            source_digest = hashlib.sha256(audio.read_bytes()).hexdigest()
             unchanged = (target.is_file() and previous.get("text") == match.group(2).strip()
-                         and hashlib.sha256(audio.read_bytes()).digest()
-                         == hashlib.sha256(target.read_bytes()).digest())
+                         and source_digest == hashlib.sha256(target.read_bytes()).hexdigest())
+            reviewed = reviews.get(role_id, {}).get(ref_id, {})
+            matching_review = (reviewed.get("wav_sha256") == source_digest
+                               and reviewed.get("text_sha256") == hashlib.sha256(
+                                   match.group(2).strip().encode("utf-8")).hexdigest())
+            quality = previous.get("quality") if unchanged else None
+            if quality in (None, "unrated"):
+                quality = reviewed.get("quality") if matching_review else "unrated"
             record = {"name": audio.stem, "audio": str(target.resolve()), "text": match.group(2).strip(),
-                      "language": language, "emotion": emotion,
-                      "quality": previous.get("quality", "unrated") if unchanged else "unrated",
+                      "language": language, "emotion": emotion, "quality": quality,
                       "source_project": str(source_root), "source_member_id": str(audio.relative_to(role_dir))}
             refs.append((audio, target, ref_id, record))
             profile["references"][ref_id] = record

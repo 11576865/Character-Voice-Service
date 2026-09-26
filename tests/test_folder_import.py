@@ -1,4 +1,5 @@
 import json
+import hashlib
 import wave
 
 from server.folder_import import apply_import, plan_import
@@ -79,3 +80,33 @@ def test_missing_old_default_is_replaced_by_imported_neutral(tmp_path):
     profile = plan[0]["data"]
     assert len(profile["references"]) == 1
     assert profile["references"][profile["default_reference"]]["text"] == "Hello"
+
+
+def test_portable_review_requires_exact_wav_and_text(tmp_path):
+    source = tmp_path / "voices"
+    model = tmp_path / "model"
+    (model / "GPT_weights_v4").mkdir(parents=True)
+    (model / "SoVITS_weights_v4").mkdir(parents=True)
+    (model / "GPT_weights_v4" / "三月七-e10.ckpt").write_bytes(b"gpt")
+    (model / "SoVITS_weights_v4" / "三月七_e10.pth").write_bytes(b"sovits")
+    audio = source / "三月七" / "reference_audios" / "英语" / "emotions" / "【中立】Hello.wav"
+    _wav(audio)
+    plan = plan_import(source, model, voice_dir=tmp_path / "new", reference_dir=tmp_path / "refs",
+                       reviews_path=None)
+    ref_id = plan[0]["data"]["default_reference"]
+    reviews = tmp_path / "reviews.json"
+    reviews.write_text(json.dumps({"reviews": {"march-7th": {ref_id: {
+        "wav_sha256": hashlib.sha256(audio.read_bytes()).hexdigest(),
+        "text_sha256": hashlib.sha256(b"Hello").hexdigest(), "quality": "good"
+    }}}}), encoding="utf-8")
+    reviewed = plan_import(source, model, voice_dir=tmp_path / "new", reference_dir=tmp_path / "refs",
+                           reviews_path=reviews)[0]["data"]
+    assert reviewed["references"][ref_id]["quality"] == "good"
+    with wave.open(str(audio), "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(16000)
+        stream.writeframes(b"\x01\x00" * 160)
+    changed = plan_import(source, model, voice_dir=tmp_path / "new", reference_dir=tmp_path / "refs",
+                          reviews_path=reviews)[0]["data"]
+    assert changed["references"][ref_id]["quality"] == "unrated"

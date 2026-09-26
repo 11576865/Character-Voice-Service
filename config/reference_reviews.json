@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "reviews": {
+    "march-7th": {
+      "folder-fbe178ca97e4": {
+        "wav_sha256": "17a090cedcd90b95747aa74b8d40ff6d8f02e6576be2f2a4b793f58d87a3f0db",
+        "text_sha256": "b422c8a47bdca5e50d7852c5df82502c338c2548f6228edfff25ca4ef9c9a27c",
+        "quality": "good"
+      },
+      "folder-13e4f350e855": {
+        "wav_sha256": "e15010629fcc0c755ab57f5f2c0efccede19d1d917a1a11ddef963236a6c7941",
+        "text_sha256": "3597cb22e4be3e24476edd33ad56fccd19ab0f918906ba2336a0608f209a88cb",
+        "quality": "good"
+      },
+      "folder-c1d5a5179c0f": {
+        "wav_sha256": "250c7f48d25eb775296b277f03aeb6fe70683230f3224f5a763c0f8d758d94cd",
+        "text_sha256": "042e3701aee9038aef1c350fdf14bcdf258e690e489e383d01ec26b6c9413093",
+        "quality": "good"
+      }
+    }
+  }
+}
