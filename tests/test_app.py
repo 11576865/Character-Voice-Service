@@ -79,12 +79,17 @@ def test_root_lists_public_endpoints():
 def test_reader_modules_are_served():
     page = client.get("/test")
     module = client.get("/reader-assets/js/reader.js")
+    stylesheet = client.get("/reader-assets/reader.css")
     assert page.status_code == 200
     assert "/reader-assets/js/reader.js" in page.text
     assert 'id="modelId"' in page.text
     assert 'id="referenceId"' in page.text
+    assert 'id="offlineStorage"' in page.text
+    assert "/reader-assets/reader.css?v=3" in page.text
     assert module.status_code == 200
     assert "javascript" in module.headers["content-type"]
+    assert stylesheet.status_code == 200
+    assert "text/css" in stylesheet.headers["content-type"]
 
 
 def test_voice_list_reads_legacy_profile_without_exposing_paths(tmp_path, monkeypatch):

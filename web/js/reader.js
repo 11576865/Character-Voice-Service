@@ -35,7 +35,8 @@ const ui = {
   continuousEmotion: element("continuousEmotion"),
   cancelGeneration: element("cancelGeneration"), libraryBooks: element("libraryBooks"),
   jobStatus: element("jobStatus"), downloadBook: element("downloadBook"),
-  offlineBooks: element("offlineBooks"), exportEpub: element("exportEpub"),
+  offlineBooks: element("offlineBooks"), offlineStorage: element("offlineStorage"),
+  exportEpub: element("exportEpub"),
   exportWav: element("exportWav"), selectedParagraphLabel: element("selectedParagraphLabel"),
   suggestSpeakers: element("suggestSpeakers"), speakerSuggestions: element("speakerSuggestions"),
   paragraphVoice: element("paragraphVoice"), paragraphReference: element("paragraphReference"),
@@ -995,14 +996,27 @@ async function loadLibrary() {
 async function renderOfflineBooks() {
   ui.offlineBooks.replaceChildren();
   try {
-    for (const book of await offlineLibrary.listBooks()) {
+    const books = await offlineLibrary.listBooks();
+    const audioBytes = books.reduce((total, book) => total +
+      (book.manifest?.clips || []).slice(0, book.downloaded || 0)
+        .reduce((sum, clip) => sum + (clip.bytes || 0), 0), 0);
+    const estimate = await navigator.storage?.estimate?.().catch(() => null);
+    const formatBytes = bytes => bytes < 1024 * 1024
+      ? `${(bytes / 1024).toFixed(1)} KB` : bytes < 1024 * 1024 * 1024
+        ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+        : `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    ui.offlineStorage.textContent = `${books.length} 本 · 已下载音频约 ${formatBytes(audioBytes)}` +
+      (estimate?.usage != null ? ` · 此站点共占用 ${formatBytes(estimate.usage)}` : "");
+    for (const book of books) {
       const open = document.createElement("button");
       open.textContent = `${book.title} · ${book.ready ? "整书可离线" : `${book.downloaded}/${book.manifest.clips.length} 段已下载`}`;
       open.addEventListener("click", () => openOfflineBook(book.id));
       ui.offlineBooks.appendChild(open);
       const remove = document.createElement("button");
       remove.textContent = `删除 ${book.title} 的本机副本`;
+      remove.className = "button-danger";
       remove.addEventListener("click", async () => {
+        if (!window.confirm(`删除本设备上的《${book.title}》及已下载音频？电脑书库中的原书不受影响。`)) return;
         await offlineLibrary.removeBook(book.id);
         await renderOfflineBooks();
       });
@@ -1380,11 +1394,11 @@ render();
 try {
   ui.fontSize.value = localStorage.getItem("cvs.reader.fontSize") || "18";
   ui.readingPane.style.fontSize = `${ui.fontSize.value}px`;
-  ui.theme.value = localStorage.getItem("cvs.reader.theme") || "auto";
+  ui.theme.value = localStorage.getItem("cvs.reader.theme") === "sepia" ? "sepia" : "dark";
   document.body.dataset.theme = ui.theme.value;
 } catch (_) { /* reader preferences stay in memory */ }
 loadVoices();
 renderOfflineBooks();
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/service-worker.js?v=2").catch(() => {});
+  navigator.serviceWorker.register("/service-worker.js?v=3").catch(() => {});
 }

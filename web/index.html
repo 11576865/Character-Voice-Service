@@ -4,79 +4,47 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Character Voice Service Reader</title>
-  <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { max-width: 1200px; margin: 0 auto; padding: 20px; }
-    button, input, select, textarea { font: inherit; }
-    button { padding: 8px 13px; cursor: pointer; }
-    button:disabled { cursor: not-allowed; opacity: .55; }
-    h1 { margin: 0 0 10px; }
-    label { display: block; margin-bottom: 5px; font-weight: 600; }
-    .toolbar, .controls { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
-    .toolbar > div { min-width: 145px; }
-    .toolbar input[type="file"] { max-width: 220px; }
-    .toolbar input[type="number"] { width: 90px; padding: 6px; }
-    select { min-width: 145px; padding: 6px; }
-    #text { width: 100%; min-height: 130px; padding: 10px; resize: vertical; }
-    #bookInfo { display: flex; gap: 8px 20px; flex-wrap: wrap; margin: 12px 0; }
-    #resumePrompt { padding: 12px; border: 1px solid currentColor; margin: 12px 0; }
-    #resumePrompt button { margin: 8px 8px 0 0; }
-    .reader-layout { display: grid; grid-template-columns: minmax(190px, 250px) minmax(0, 1fr); gap: 18px; }
-    #chaptersPanel { border: 1px solid #8886; border-radius: 8px; padding: 12px; max-height: 68vh; overflow: auto; }
-    #chaptersPanel summary { font-weight: 700; cursor: pointer; }
-    #chapterList { display: grid; gap: 5px; margin-top: 12px; }
-    #chapterList button { width: 100%; text-align: left; border: 0; background: transparent; border-radius: 5px; }
-    #chapterList button.active { background: #4a78d44d; font-weight: 700; }
-    #readingPane { border: 1px solid #8886; border-radius: 8px; padding: 18px; height: 68vh; overflow: auto; line-height: 1.8; scroll-behavior: smooth; }
-    #readingPane section { margin-bottom: 36px; }
-    #readingPane h2 { margin-top: 0; }
-    #readingPane p { white-space: pre-wrap; margin: 0 0 1em; }
-    .segment.active { background: #e6b64175; border-radius: 3px; }
-    #readingPane p.annotated { border-left: 3px solid #4a78d4; padding-left: 8px; }
-    #readingPane p.selected-paragraph { outline: 2px solid #e6b641; border-radius: 3px; }
-    body[data-theme="sepia"] { background: #f4ecd8; color: #453522; }
-    body[data-theme="dark"] { background: #17191e; color: #ebedf3; }
-    #status { min-height: 1.5em; white-space: pre-wrap; }
-    #position { font-variant-numeric: tabular-nums; }
-    @media (max-width: 700px) {
-      body { padding: 12px; }
-      .reader-layout { display: block; }
-      #chaptersPanel { max-height: 40vh; margin-bottom: 12px; }
-      #readingPane { height: 60vh; }
-      .controls button { flex: 1 1 auto; }
-    }
-  </style>
+  <link rel="icon" type="image/svg+xml" href="/reader-assets/favicon.svg?v=3">
+  <link rel="stylesheet" href="/reader-assets/reader.css?v=3">
 </head>
 <body>
-  <header>
-    <h1>Character Voice Service</h1>
-    <p>导入 TXT / EPUB，或直接粘贴文本。阅读位置保存在此浏览器中。</p>
-    <p><a href="/epub-prototype">EPUB 排版组件验证</a></p>
+  <header class="app-header">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">◉</span><span>CVS <small>CHARACTER VOICE SERVICE</small></span></div>
+    <nav class="top-nav" aria-label="页面导航">
+      <a href="#setupPanel">导入与声音</a><a href="#reader">听读</a><a href="#libraryPanel">书库与导出</a>
+    </nav>
+    <div class="hero">
+      <div><p class="eyebrow">PRIVATE VOICE STUDIO · READER</p>
+        <h1>让文字，用喜欢的声音继续。</h1>
+        <p>导入 TXT、EPUB 或文档，选择角色与参考语音，边读边听。已下载的书也能在本设备离线播放。</p>
+      </div>
+      <div class="hero-links"><a class="text-link" href="/epub-prototype">EPUB 排版验证 ↗</a></div>
+    </div>
   </header>
 
-  <details id="libraryPanel">
+  <details id="libraryPanel" class="surface library-panel">
     <summary>我的书库与整书生成</summary>
-    <p>私人书库令牌保存在电脑上的 data/admin-token.txt；也可通过 CVS_ADMIN_TOKEN 指定。登录后网页使用受保护会话。</p>
-    <label for="libraryToken">书库令牌</label><input id="libraryToken" type="password" autocomplete="off">
-    <button id="loginLibrary">登录书库</button>
-    <button id="loadLibrary">刷新书库</button>
-    <button id="saveBook">保存当前书籍</button>
-    <button id="generateBook">整本书一键生成</button>
-    <label><input id="continuousEmotion" type="checkbox">试用长篇情绪连续规划</label>
-    <button id="cancelGeneration">取消生成</button>
-    <button id="downloadBook">下载整本书到本设备</button>
-    <button id="exportEpub">导出同步 EPUB</button>
-    <button id="exportWav">导出整篇 WAV</button>
-    <button id="suggestSpeakers">查找明确的角色标记</button>
+    <p class="muted">私人书库令牌位于电脑上的 data/admin-token.txt，也可通过 CVS_ADMIN_TOKEN 指定。</p>
+    <div class="library-auth"><div><label for="libraryToken">书库令牌</label><input id="libraryToken" type="password" autocomplete="off" placeholder="输入令牌以访问私人内容"></div>
+      <button id="loginLibrary" class="button-primary">登录书库</button></div>
+    <div class="library-actions">
+      <button id="loadLibrary">刷新书库</button><button id="saveBook">保存当前书籍</button>
+      <button id="generateBook" class="button-primary">整本书一键生成</button>
+      <button id="cancelGeneration" class="button-danger">取消生成</button>
+      <button id="downloadBook">下载整本书到本设备</button>
+      <button id="exportEpub">导出同步 EPUB</button><button id="exportWav">导出整篇 WAV</button>
+      <button id="suggestSpeakers">查找明确的角色标记</button>
+    </div>
+    <label class="check-row"><input id="continuousEmotion" type="checkbox">试用长篇情绪连续规划</label>
     <div id="speakerSuggestions"></div>
     <div id="jobStatus" role="status"></div>
-    <nav id="libraryBooks" aria-label="本机书库"></nav>
-    <h3>本设备离线书籍</h3>
-    <nav id="offlineBooks" aria-label="离线书库"></nav>
+    <div class="library-columns"><div><h3>电脑书库</h3><nav id="libraryBooks" aria-label="本机书库"></nav></div>
+      <div><h3>本设备离线书籍</h3><div id="offlineStorage" class="muted" role="status"></div><nav id="offlineBooks" aria-label="离线书库"></nav></div></div>
   </details>
 
-  <div class="toolbar">
+  <section class="surface setup-panel" id="setupPanel" aria-label="导入与声音设置">
+    <div class="section-heading"><div><span class="step">01 / SETUP</span><h2>导入与声音</h2></div><p>先选内容，再选角色、模型和参考语音。</p></div>
+    <div class="toolbar">
     <div><label for="txtFile">TXT 文件</label><input id="txtFile" type="file" accept=".txt,text/plain"></div>
     <div><label for="epubFile">EPUB 文件</label><input id="epubFile" type="file" accept=".epub,application/epub+zip"></div>
     <div><label for="documentFile">文档配音</label><input id="documentFile" type="file" accept=".md,.docx,.txt"></div>
@@ -85,47 +53,60 @@
     <div><label for="referenceId">参考语音</label><select id="referenceId" disabled></select></div>
     <div>
       <button id="previewReference">试听原始参考</button>
-      <span id="referencePreviewStatus" role="status" aria-live="polite"></span>
+      <span id="referencePreviewStatus" class="inline-status" role="status" aria-live="polite"></span>
     </div>
     <div><label for="speed">速度</label><input id="speed" type="number" min="0.1" step="0.1" value="1.0"></div>
   </div>
+  </section>
 
-  <details id="manualPanel">
+  <details id="manualPanel" class="surface">
     <summary>手动粘贴文本</summary>
     <label for="text">文本内容</label>
     <textarea id="text" placeholder="在这里粘贴文本。空行用于分段。"></textarea>
     <button id="useManual">使用粘贴文本</button>
   </details>
 
-  <div id="bookInfo">
+  <div id="bookInfo" class="book-info">
     <span id="source">文本来源：未加载</span>
     <span id="bookTitle">书名：—</span>
     <span id="bookAuthor">作者：—</span>
     <span id="chapterCount">章节：—</span>
   </div>
 
-  <section id="resumePrompt" hidden aria-label="恢复阅读进度">
+  <section id="resumePrompt" class="surface" hidden aria-label="恢复阅读进度">
     <div id="resumeText">检测到上次阅读位置。</div>
     <button id="resumeLast">继续阅读</button>
     <button id="restartBook">从头开始</button>
   </section>
 
-  <div class="controls">
+  <section class="surface playback-panel" aria-label="朗读控制">
+    <div class="section-heading"><div><span class="step">02 / PLAYBACK</span><h2>朗读控制</h2></div><span id="position">尚未开始阅读</span></div>
+    <div class="controls">
     <button id="previousChapter" disabled>上一章</button>
     <button id="previousSegment" disabled>上一段</button>
-    <button id="start" disabled>开始</button>
+    <button id="start" class="button-primary" disabled>开始</button>
     <button id="pause" disabled>暂停</button>
-    <button id="stop" disabled>停止</button>
-    <button id="regenerateParagraph" disabled>重新生成当前段落</button>
+    <button id="stop" class="button-danger" disabled>停止</button>
+    <button id="regenerateParagraph" class="button-accent" disabled>重新生成当前段落</button>
     <button id="previewSelection" disabled>试听所选文字</button>
     <button id="nextSegment" disabled>下一段</button>
     <button id="nextChapter" disabled>下一章</button>
   </div>
   <div id="status" role="status" aria-live="polite">正在读取角色列表……</div>
   <div id="storageNotice" hidden>此浏览器无法使用 localStorage，本次阅读位置不会在刷新后保留。</div>
-  <div id="position">尚未开始阅读</div>
   <div id="currentChapter">当前章节：—</div>
-  <details>
+  </section>
+
+  <section class="reader-section" id="reader" aria-label="听读区域">
+    <div class="section-heading"><div><span class="step">03 / READER</span><h2>正文听读</h2></div><p>点击段落可设置角色；播放时自动跟随当前位置。</p></div>
+    <div class="reader-layout">
+      <aside><details id="chaptersPanel" open><summary>章节列表</summary><nav id="chapterList" aria-label="章节导航"></nav></details></aside>
+      <main id="readingPane" aria-label="正文阅读区域"><div id="documentBody">请选择 TXT / EPUB，或使用粘贴文本。</div></main>
+    </div>
+  </section>
+
+  <div class="advanced-grid">
+  <details class="surface">
     <summary>阅读工具</summary>
     <div class="controls">
       <button id="addBookmark">在当前位置添加书签</button>
@@ -134,11 +115,11 @@
       <input id="searchText" type="search" placeholder="搜索书内文字" aria-label="搜索书内文字">
       <button id="searchNext">查找下一处</button>
       <label for="fontSize">字号</label><input id="fontSize" type="range" min="14" max="30" value="18">
-      <label for="theme">主题</label><select id="theme"><option value="auto">系统</option><option value="sepia">护眼</option><option value="dark">深色</option></select>
+      <label for="theme">主题</label><select id="theme"><option value="dark">深色</option><option value="sepia">护眼</option></select>
       <label for="sleepMinutes">睡眠定时</label><select id="sleepMinutes"><option value="0">关闭</option><option value="10">10 分钟</option><option value="20">20 分钟</option><option value="30">30 分钟</option><option value="60">60 分钟</option></select>
     </div>
   </details>
-  <section aria-label="段落角色标注">
+  <section class="surface" aria-label="段落角色标注">
     <strong id="selectedParagraphLabel">点击正文段落以指定角色</strong>
     <div class="controls">
       <div><label for="paragraphVoice">段落角色</label><select id="paragraphVoice"></select></div>
@@ -146,7 +127,7 @@
       <button id="applyParagraphVoice" disabled>保存段落标注</button>
     </div>
   </section>
-  <section aria-label="发音纠正">
+  <section class="surface" aria-label="发音纠正">
     <details>
       <summary>发音纠正</summary>
       <p>正文保持原样；生成语音时替换指定词语。修改后需重新生成受影响的段落或整书。</p>
@@ -156,26 +137,15 @@
       <div id="pronunciationList"></div>
     </details>
   </section>
-  <section aria-label="段落音频版本">
+  <section class="surface" aria-label="段落音频版本">
     <label for="paragraphVersions">当前段落已保存的版本</label>
     <select id="paragraphVersions" disabled></select>
     <button id="selectVersion" disabled>选用并播放</button>
-    <button id="deleteVersion" disabled>删除此版本</button>
+    <button id="deleteVersion" class="button-danger" disabled>删除此版本</button>
   </section>
-
-  <div class="reader-layout">
-    <aside>
-      <details id="chaptersPanel" open>
-        <summary>章节列表</summary>
-        <nav id="chapterList" aria-label="章节导航"></nav>
-      </details>
-    </aside>
-    <main id="readingPane" aria-label="正文阅读区域">
-      <div id="documentBody">请选择 TXT / EPUB，或使用粘贴文本。</div>
-    </main>
   </div>
 
   <audio id="audio" hidden></audio>
-  <script type="module" src="/reader-assets/js/reader.js?v=2"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=3"></script>
 </body>
 </html>
