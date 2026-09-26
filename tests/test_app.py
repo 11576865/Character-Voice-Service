@@ -134,6 +134,24 @@ def test_voice_list_marks_invalid_json(tmp_path, monkeypatch):
     assert response.json()["voices"][0]["error"] == "invalid profile"
 
 
+def test_reference_audio_requires_login_and_serves_selected_wav(tmp_path, monkeypatch):
+    profile = write_registry_profile(tmp_path)
+    audio = tmp_path / "surprised.wav"
+    audio.write_bytes(b"RIFF-test-reference")
+    profile["references"]["surprised"]["audio"] = str(audio)
+    (tmp_path / "march-7th.json").write_text(json.dumps(profile), encoding="utf-8")
+    monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
+    client = TestClient(app_module.app, base_url="https://testserver")
+    url = "/v1/voices/march-7th/references/surprised/audio"
+
+    assert client.get(url).status_code == 401
+    assert client.post("/v1/session", json={"token": app_module.ADMIN_TOKEN}).status_code == 200
+    response = client.get(url)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == audio.read_bytes()
+
+
 def test_speech_resolves_requested_model_and_reference(tmp_path, monkeypatch):
     write_registry_profile(tmp_path)
     wav = b"RIFF\x00\x00\x00\x00WAVE"

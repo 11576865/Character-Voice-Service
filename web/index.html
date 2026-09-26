@@ -83,7 +83,10 @@
     <div><label for="voice">角色</label><select id="voice" disabled></select></div>
     <div><label for="modelId">模型</label><select id="modelId" disabled></select></div>
     <div><label for="referenceId">参考语音</label><select id="referenceId" disabled></select></div>
-    <button id="previewReference">试听原始参考</button>
+    <div>
+      <button id="previewReference">试听原始参考</button>
+      <span id="referencePreviewStatus" role="status" aria-live="polite"></span>
+    </div>
     <div><label for="speed">速度</label><input id="speed" type="number" min="0.1" step="0.1" value="1.0"></div>
   </div>
 

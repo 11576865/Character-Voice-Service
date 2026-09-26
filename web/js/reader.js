@@ -11,7 +11,7 @@ import { OfflineLibrary } from "./offline.js";
 const element = id => document.getElementById(id);
 const ui = {
   voice: element("voice"), modelId: element("modelId"), referenceId: element("referenceId"),
-  previewReference: element("previewReference"),
+  previewReference: element("previewReference"), referencePreviewStatus: element("referencePreviewStatus"),
   speed: element("speed"), text: element("text"),
   txtFile: element("txtFile"), epubFile: element("epubFile"), documentFile: element("documentFile"),
   manualPanel: element("manualPanel"),
@@ -28,7 +28,8 @@ const ui = {
   position: element("position"), status: element("status"), storageNotice: element("storageNotice"),
   paragraphVersions: element("paragraphVersions"), selectVersion: element("selectVersion"),
   deleteVersion: element("deleteVersion"),
-  libraryToken: element("libraryToken"), loginLibrary: element("loginLibrary"),
+  libraryPanel: element("libraryPanel"), libraryToken: element("libraryToken"),
+  loginLibrary: element("loginLibrary"),
   loadLibrary: element("loadLibrary"),
   saveBook: element("saveBook"), generateBook: element("generateBook"),
   continuousEmotion: element("continuousEmotion"),
@@ -137,7 +138,9 @@ async function libraryFetch(url, options = {}) {
     headers: libraryHeaders(options.headers) });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `HTTP ${response.status}`);
+    const error = new Error(body.detail || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return response;
 }
@@ -151,6 +154,7 @@ async function loginLibrary() {
     if (!response.ok) throw new Error("令牌无效");
     ui.libraryToken.value = "";
     ui.jobStatus.textContent = "书库已登录。";
+    ui.referencePreviewStatus.textContent = "已登录，请再次点击试听原始参考。";
     await loadLibrary();
     await syncOfflineChanges();
   } catch (error) { ui.jobStatus.textContent = `登录失败：${error.message}`; }
@@ -790,6 +794,7 @@ async function previewReference() {
   const reference = ui.referenceId.value;
   if (!voice || !reference || reference === "auto") {
     statusOverride = "请先选择一条具体的参考语音。";
+    ui.referencePreviewStatus.textContent = statusOverride;
     render();
     return;
   }
@@ -802,7 +807,17 @@ async function previewReference() {
     previewAudio.onended = () => URL.revokeObjectURL(url);
     await previewAudio.play();
     statusOverride = `正在试听参考语音：${reference}`;
-  } catch (error) { statusOverride = `参考语音试听失败：${error.message}`; }
+    ui.referencePreviewStatus.textContent = statusOverride;
+  } catch (error) {
+    if (error.status === 401) {
+      ui.libraryPanel.open = true;
+      ui.libraryToken.focus();
+      statusOverride = "试听原始参考需要登录。请在上方“我的书库与整书生成”输入书库令牌并登录，然后再点击试听。";
+    } else {
+      statusOverride = `参考语音试听失败：${error.message}`;
+    }
+    ui.referencePreviewStatus.textContent = statusOverride;
+  }
   render();
 }
 
