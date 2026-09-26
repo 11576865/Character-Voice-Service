@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Character Voice Service Reader</title>
   <link rel="icon" type="image/svg+xml" href="/reader-assets/favicon.svg?v=3">
-  <link rel="stylesheet" href="/reader-assets/reader.css?v=3">
+  <link rel="stylesheet" href="/reader-assets/reader.css?v=4">
 </head>
 <body>
   <header class="app-header">
     <div class="brand"><span class="brand-mark" aria-hidden="true">◉</span><span>CVS <small>CHARACTER VOICE SERVICE</small></span></div>
     <nav class="top-nav" aria-label="页面导航">
-      <a href="#setupPanel">导入与声音</a><a href="#reader">听读</a><a href="#libraryPanel">书库与导出</a>
+      <a href="#guidePanel">使用说明</a><a href="#setupPanel">导入与声音</a><a href="#reader">听读</a><a href="#libraryPanel">书库与导出</a>
     </nav>
     <div class="hero">
       <div><p class="eyebrow">PRIVATE VOICE STUDIO · READER</p>
@@ -21,6 +21,28 @@
       <div class="hero-links"><a class="text-link" href="/epub-prototype">EPUB 排版验证 ↗</a></div>
     </div>
   </header>
+
+  <section class="surface guide-panel" id="guidePanel" aria-labelledby="guideHeading">
+    <div class="section-heading"><div><span class="step">QUICK GUIDE</span><h2 id="guideHeading">从文字到成品</h2></div><p>导入和试听不等于保存；需要成品时再保存到书库并生成。</p></div>
+    <div class="guide-grid">
+      <article><strong>1 · 导入</strong><p>TXT / EPUB 用于听读；文档配音可导入 TXT、Markdown、DOCX。也可直接粘贴文本。</p></article>
+      <article><strong>2 · 选声音并试听</strong><p>选角色、模型、参考语音后点“开始”；“试听原始参考”播放已有 WAV，“重新生成当前段落”会发起新推理。</p></article>
+      <article><strong>3 · 保存并生成</strong><p>登录私人书库，先“保存当前书籍”，再“整本书一键生成”。已完成段落可在书库中继续播放。</p></article>
+      <article><strong>4 · 带走成品</strong><p>“下载整本书到本设备”供手机网页离线听读；“导出同步 EPUB / 整篇 WAV”会触发浏览器下载。</p></article>
+    </div>
+    <details class="storage-guide" id="storageGuide" open>
+      <summary>文件与成品保存在哪里</summary>
+      <div class="storage-list">
+        <div><strong>电脑书库与生成音频</strong><p>只有点击“保存当前书籍”后才进入电脑书库。书籍原件、任务记录、段落 WAV / MP3 和导出成品保存在同一书籍目录。</p><code id="storageBookPath">登录书库后可查看实际目录</code></div>
+        <div><strong>浏览器中的段落版本与离线书</strong><p>“重新生成当前段落”的版本、已下载的离线书及阅读进度保存在当前浏览器的站点存储中，不能在文件管理器中直接当作 EPUB 找到。清除网站数据可能删除它们。</p></div>
+        <div><strong>导出的 EPUB / WAV</strong><p>服务器会在书籍目录保留成品；网页也会下载一份到浏览器设置的下载位置，通常是“下载”文件夹。具体下载目录由浏览器决定。</p></div>
+        <div><strong>角色参考语音</strong><p>导入脚本复制的参考 WAV 存放在电脑上；原始参考试听读取这些文件。</p><code id="storageReferencePath">登录书库后可查看实际目录</code></div>
+        <div><strong>实时朗读音频</strong><p>普通实时播放不会逐条保存 WAV 到电脑音乐目录；开启 CVS_SAVE_GENERATED_WAV=1 后才额外保存。</p><code id="storageRealtimePath">登录书库后可查看当前设置</code></div>
+      </div>
+      <button id="showStoragePaths" type="button">查看本机实际路径</button>
+      <span id="storagePathStatus" role="status" aria-live="polite"></span>
+    </details>
+  </section>
 
   <details id="libraryPanel" class="surface library-panel">
     <summary>我的书库与整书生成</summary>
@@ -146,6 +168,6 @@
   </div>
 
   <audio id="audio" hidden></audio>
-  <script type="module" src="/reader-assets/js/reader.js?v=4"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=5"></script>
 </body>
 </html>

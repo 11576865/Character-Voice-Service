@@ -85,7 +85,9 @@ def test_reader_modules_are_served():
     assert 'id="modelId"' in page.text
     assert 'id="referenceId"' in page.text
     assert 'id="offlineStorage"' in page.text
-    assert "/reader-assets/reader.css?v=3" in page.text
+    assert 'id="storageBookPath"' in page.text
+    assert 'id="showStoragePaths"' in page.text
+    assert "/reader-assets/reader.css?v=4" in page.text
     assert module.status_code == 200
     assert "javascript" in module.headers["content-type"]
     assert stylesheet.status_code == 200
@@ -155,6 +157,17 @@ def test_reference_audio_requires_login_and_serves_selected_wav(tmp_path, monkey
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/wav"
     assert response.content == audio.read_bytes()
+
+
+def test_storage_paths_require_login_and_are_not_cached():
+    client = TestClient(app_module.app, base_url="https://testserver")
+    assert client.get("/v1/storage").status_code == 401
+    response = client.get("/v1/storage", headers={"X-CVS-Token": app_module.ADMIN_TOKEN})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.json()["books_root"].endswith("books")
+    assert response.json()["references_root"].endswith("references")
+    assert response.json()["books_root"] not in client.get("/").text
 
 
 def test_speech_resolves_requested_model_and_reference(tmp_path, monkeypatch):

@@ -46,7 +46,10 @@ const ui = {
   addBookmark: element("addBookmark"), bookmarkList: element("bookmarkList"),
   goBookmark: element("goBookmark"), searchText: element("searchText"),
   searchNext: element("searchNext"), fontSize: element("fontSize"),
-  theme: element("theme"), sleepMinutes: element("sleepMinutes")
+  theme: element("theme"), sleepMinutes: element("sleepMinutes"),
+  showStoragePaths: element("showStoragePaths"), storageBookPath: element("storageBookPath"),
+  storageReferencePath: element("storageReferencePath"), storageRealtimePath: element("storageRealtimePath"),
+  storagePathStatus: element("storagePathStatus")
 };
 
 const progressStore = new ProgressStore();
@@ -90,6 +93,7 @@ let bookVersions = {};
 let offlineAudioVersion = null;
 let offlineAnnotationsSignature = "";
 let sleepTimer = null;
+let storageInfo = null;
 
 function bookmarkKey() { return `cvs.bookmarks.v1:${documentId || "manual"}`; }
 
@@ -156,9 +160,42 @@ async function loginLibrary() {
     ui.libraryToken.value = "";
     ui.jobStatus.textContent = "书库已登录。";
     ui.referencePreviewStatus.textContent = "已登录，请再次点击试听原始参考。";
+    await loadStoragePaths();
     await loadLibrary();
     await syncOfflineChanges();
   } catch (error) { ui.jobStatus.textContent = `登录失败：${error.message}`; }
+}
+
+function renderStoragePaths() {
+  if (!storageInfo) return;
+  const separator = storageInfo.books_root.includes("\\") ? "\\" : "/";
+  const bookPath = currentBookId
+    ? `${storageInfo.books_root}${separator}${currentBookId}` : storageInfo.books_root;
+  ui.storageBookPath.textContent = currentBookId
+    ? `书籍目录：${bookPath}\n` +
+      `段落音频：${bookPath}${separator}audio${separator}…\n` +
+      `导出后：${bookPath}${separator}${currentBookId}-read-aloud.epub\n` +
+      `导出后：${bookPath}${separator}${currentBookId}-complete.wav`
+    : `${bookPath}（当前内容尚未保存为书籍）`;
+  ui.storageReferencePath.textContent = storageInfo.references_root;
+  ui.storageRealtimePath.textContent = storageInfo.realtime_wav_root
+    ? `已开启额外保存：${storageInfo.realtime_wav_root}` : "当前未开启额外保存";
+}
+
+async function loadStoragePaths() {
+  try {
+    storageInfo = await (await libraryFetch("/v1/storage")).json();
+    ui.storagePathStatus.textContent = "已显示当前 CVS 主机上的实际路径。";
+    renderStoragePaths();
+  } catch (error) {
+    if (error.status === 401) {
+      ui.libraryPanel.open = true;
+      ui.libraryToken.focus();
+      ui.storagePathStatus.textContent = "请先在“我的书库与整书生成”登录，再查看实际路径。";
+    } else {
+      ui.storagePathStatus.textContent = `路径读取失败：${error.message}`;
+    }
+  }
 }
 
 function paragraphSegments(segment) {
@@ -602,6 +639,7 @@ function render(snapshot = queue.snapshot) {
   const choiceLabel = choice?.id && ui.referenceId.value === "auto"
     ? ` · 参考：${choice.id}（${choice.reason || "自动"}）` : "";
   ui.status.textContent = statusOverride || (loading ? "正在读取文件……" : messages[snapshot.state] + choiceLabel);
+  renderStoragePaths();
 }
 
 function showDocument(model, metadata, id, label) {
@@ -1040,6 +1078,7 @@ async function openOfflineBook(bookId) {
     book.clientDocumentId || `book:${bookId}`, `本设备离线：${book.title}`);
   currentBookId = bookId;
   bookSegmentIds = book.segments.map(item => item.id);
+  renderStoragePaths();
   annotations = book.annotations || {};
   pronunciations = book.pronunciations || {};
   pronunciationsUpdatedAt = book.pronunciationsUpdatedAt || null;
@@ -1139,6 +1178,7 @@ async function saveCurrentBook() {
       });
     }
     currentBookId = book.id;
+    renderStoragePaths();
     const details = await (await libraryFetch(`/v1/books/${book.id}`)).json();
     bookSegmentIds = details.segments.map(item => item.id);
     if (Object.keys(annotations).length) {
@@ -1172,6 +1212,7 @@ async function openBook(bookId) {
       book.clientDocumentId || `book:${bookId}`, `书库：${book.title}`);
     currentBookId = bookId;
     bookSegmentIds = book.segments.map(item => item.id);
+    renderStoragePaths();
     annotations = book.annotations || {};
     pronunciations = book.pronunciations || {};
     pronunciationsUpdatedAt = book.pronunciationsUpdatedAt || null;
@@ -1380,6 +1421,7 @@ ui.sleepMinutes.addEventListener("change", () => {
   }, minutes * 60000);
 });
 ui.loginLibrary.addEventListener("click", loginLibrary);
+ui.showStoragePaths.addEventListener("click", loadStoragePaths);
 ui.loadLibrary.addEventListener("click", loadLibrary);
 ui.saveBook.addEventListener("click", saveCurrentBook);
 ui.generateBook.addEventListener("click", generateWholeBook);
@@ -1430,5 +1472,5 @@ try {
 loadVoices();
 renderOfflineBooks();
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/service-worker.js?v=4").catch(() => {});
+  navigator.serviceWorker.register("/service-worker.js?v=5").catch(() => {});
 }

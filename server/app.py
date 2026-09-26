@@ -29,6 +29,7 @@ from server.config import (
     GPT_SOVITS_HEALTH_URL,
     HOST,
     PORT,
+    PROJECT_ROOT,
     SAVE_DIR,
     SAVE_GENERATED_WAV,
     VOICE_DIR,
@@ -123,6 +124,16 @@ def login(request: LoginRequest, http_request: Request):
     response.set_cookie("cvs_session", _session_value(), httponly=True, secure=secure,
                         samesite="lax", max_age=7 * 24 * 3600, path="/")
     return response
+
+
+@app.get("/v1/storage", dependencies=[Depends(require_admin)])
+def storage_locations(response: Response):
+    response.headers["Cache-Control"] = "private, no-store"
+    return {
+        "books_root": str((DATA_DIR / "books").resolve()),
+        "references_root": str((PROJECT_ROOT / "references").resolve()),
+        "realtime_wav_root": str(SAVE_DIR.resolve()) if SAVE_GENERATED_WAV else None,
+    }
 
 
 def get_book_or_404(book_id: str) -> dict:

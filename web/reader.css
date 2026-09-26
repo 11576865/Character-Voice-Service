@@ -113,6 +113,18 @@ input[type="checkbox"], input[type="range"] { accent-color: var(--green); }
 .hero h1 { max-width: 700px; margin-bottom: 12px; font-size: clamp(2rem, 4vw, 3.4rem); line-height: 1.2; letter-spacing: -.05em; }
 .hero p:last-child { max-width: 780px; margin-bottom: 0; color: var(--muted); }
 .text-link { white-space: nowrap; text-decoration: none; font-weight: 700; }
+.guide-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.guide-grid article { padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--reader); }
+.guide-grid strong { color: var(--green); }
+.guide-grid p { margin: 8px 0 0; color: var(--muted); font-size: .88rem; }
+.storage-guide { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.storage-guide > summary { color: var(--blue); }
+.storage-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 22px; margin: 16px 0; }
+.storage-list > div { min-width: 0; }
+.storage-list strong { color: var(--text); }
+.storage-list p { margin: 5px 0; color: var(--muted); font-size: .86rem; }
+.storage-list code { display: block; overflow-wrap: anywhere; white-space: pre-wrap; padding: 7px 9px; border-radius: 7px; color: var(--blue); background: var(--blue-soft); font-size: .8rem; }
+#storagePathStatus { display: inline-block; margin-left: 10px; color: var(--blue); font-size: .86rem; }
 details > summary { cursor: pointer; font-weight: 750; }
 .library-panel > summary { font-size: 1.12rem; color: var(--blue); }
 .library-panel > summary::after { content: "  ·  私人内容与离线导出"; color: var(--muted); font-size: .86rem; font-weight: 450; }
@@ -186,6 +198,7 @@ body[data-theme="sepia"] select, body[data-theme="sepia"] textarea { background:
 body[data-theme="sepia"] label { color: var(--text); }
 @media (max-width: 1000px) {
   .toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .guide-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hero { padding-top: 30px; }
 }
 @media (max-width: 700px) {
@@ -196,7 +209,7 @@ body[data-theme="sepia"] label { color: var(--text); }
   .surface, .reader-section { padding: 16px; border-radius: 14px; }
   .section-heading { display: block; }
   .section-heading p { margin-top: 7px; }
-  .toolbar, .library-columns, .advanced-grid { grid-template-columns: 1fr; }
+  .toolbar, .library-columns, .advanced-grid, .guide-grid, .storage-list { grid-template-columns: 1fr; }
   .reader-layout { grid-template-columns: 1fr; }
   #chaptersPanel { max-height: 34vh; }
   #readingPane { height: 62vh; padding: 20px; }
