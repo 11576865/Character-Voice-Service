@@ -18,6 +18,18 @@ export function documentIdForFile(buffer, kind) {
   return `file:${kind}:${bytes.length}:${hex(first)}${hex(second)}`;
 }
 
+export function progressSyncDecision(local, remote, baselineLocalAt, baselineRemoteAt) {
+  if (!local) return remote ? "computer" : "none";
+  if (!remote) return "device";
+  if (local.segmentIndex === remote.segmentIndex &&
+      Math.abs(local.audioTime - (remote.audioTime || 0)) <= 1) return "none";
+  const localChanged = local.updatedAt !== baselineLocalAt;
+  const remoteChanged = remote.updatedAt !== baselineRemoteAt;
+  if (localChanged && !remoteChanged) return "device";
+  if (remoteChanged && !localChanged) return "computer";
+  return "choose";
+}
+
 function usableStorage(storage) {
   try {
     const key = `${PROGRESS_KEY_PREFIX}probe`;
@@ -40,7 +52,7 @@ export class ProgressStore {
     this.memory = new Map();
   }
 
-  save({ documentId, title, chapterIndex, segmentIndex, audioTime }) {
+  save({ documentId, title, chapterIndex, segmentIndex, audioTime, updatedAt }) {
     if (!documentId || !Number.isInteger(chapterIndex) || chapterIndex < 0 ||
         !Number.isInteger(segmentIndex) || segmentIndex < 0) return false;
     const record = {
@@ -50,7 +62,8 @@ export class ProgressStore {
       chapterIndex,
       segmentIndex,
       audioTime: Number.isFinite(audioTime) && audioTime >= 0 ? audioTime : 0,
-      updatedAt: new Date().toISOString()
+      updatedAt: typeof updatedAt === "string" && Number.isFinite(Date.parse(updatedAt))
+        ? updatedAt : new Date().toISOString()
     };
     const key = PROGRESS_KEY_PREFIX + documentId;
     this.memory.set(key, record);

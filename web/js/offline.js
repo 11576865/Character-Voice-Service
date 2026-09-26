@@ -60,7 +60,9 @@ export class OfflineLibrary {
     const saved = { ...book, manifest, ready: false, downloaded: 0,
       annotations: previous?.pendingAnnotationsAt ? previous.annotations : book.annotations,
       annotationsUpdatedAt: previous?.pendingAnnotationsAt ? previous.annotationsUpdatedAt : book.annotationsUpdatedAt,
-      pendingAnnotationsAt: previous?.pendingAnnotationsAt || null };
+      pendingAnnotationsAt: previous?.pendingAnnotationsAt || null,
+      progressSyncLocalAt: previous?.progressSyncLocalAt || null,
+      progressSyncRemoteAt: previous?.progressSyncRemoteAt || null };
     await this.putBook(saved);
     for (const [index, clip] of expected.entries()) {
       let audio = await this.getClip(book.id, clip.segmentId);

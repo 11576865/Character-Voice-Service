@@ -3,10 +3,10 @@ import { readEpubFile } from "./epub_source.js";
 import { segmentDocument } from "./segmenter.js";
 import { AudioPlayer } from "./player.js";
 import { ReaderQueue } from "./queue.js";
-import { ProgressStore, documentIdForFile } from "./progress.js";
+import { ProgressStore, documentIdForFile, progressSyncDecision } from "./progress.js?v=4";
 import { ReaderNavigation, chapterStart, chapterPosition } from "./navigation.js";
 import { VariantStore } from "./variants.js";
-import { OfflineLibrary } from "./offline.js";
+import { OfflineLibrary } from "./offline.js?v=4";
 
 const element = id => document.getElementById(id);
 const ui = {
@@ -1070,6 +1070,14 @@ async function downloadWholeBook() {
       const response = await libraryFetch(`/v1/books/${bookId}/offline-audio/${segmentId}`);
       return response.blob();
     }, (done, total) => { ui.jobStatus.textContent = `正在下载并校验：${done}/${total}`; });
+    try {
+      const remote = await (await libraryFetch(`/v1/books/${bookId}/progress`)).json();
+      const local = progressStore.load(documentId, currentDocument, segments);
+      await offlineLibrary.updateBook(bookId, {
+        progressSyncLocalAt: local?.updatedAt || "",
+        progressSyncRemoteAt: remote.updatedAt || ""
+      });
+    } catch (_) { /* missing sync baseline will require a position choice later */ }
     ui.jobStatus.textContent = "整本书已下载并校验，可关闭电脑后离线听读。";
     await renderOfflineBooks();
   } catch (error) {
@@ -1217,12 +1225,34 @@ async function syncOfflineChanges() {
       const bookSegments = segmentDocument(cached.document);
       const local = progressStore.load(docId, cached.document, bookSegments);
       const remote = await (await libraryFetch(`/v1/books/${cached.id}/progress`)).json();
-      if (local && local.updatedAt > (remote.updatedAt || "")) {
-        await libraryFetch(`/v1/books/${cached.id}/progress`, {
+      const hasRemote = Number.isInteger(remote.segmentIndex) &&
+        remote.segmentIndex >= 0 && remote.segmentIndex < bookSegments.length;
+      const decision = progressSyncDecision(local, hasRemote ? remote : null,
+        cached.progressSyncLocalAt, cached.progressSyncRemoteAt);
+      let useDevice = decision === "device";
+      let useComputer = decision === "computer";
+      if (decision === "choose") {
+        useDevice = window.confirm(`《${cached.title}》在本设备和电脑上的阅读位置不同。` +
+          `本设备：第 ${local.segmentIndex + 1} 段；电脑：第 ${remote.segmentIndex + 1} 段。` +
+          "确定使用本设备位置，取消使用电脑位置。");
+        useComputer = !useDevice;
+      }
+      let synchronizedRemote = remote;
+      if (useDevice) {
+        synchronizedRemote = await (await libraryFetch(`/v1/books/${cached.id}/progress`, {
           method: "PUT", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ segmentIndex: local.segmentIndex, audioTime: local.audioTime })
-        });
+        })).json();
+      } else if (useComputer) {
+        progressStore.save({ documentId: docId, title: cached.document.title,
+          chapterIndex: bookSegments[remote.segmentIndex].chapterIndex,
+          segmentIndex: remote.segmentIndex, audioTime: remote.audioTime || 0,
+          updatedAt: remote.updatedAt });
       }
+      await offlineLibrary.updateBook(cached.id, {
+        progressSyncLocalAt: progressStore.load(docId, cached.document, bookSegments)?.updatedAt || "",
+        progressSyncRemoteAt: synchronizedRemote.updatedAt || ""
+      });
     } catch (_) { /* keep local edits for the next connection */ }
   }
 }
@@ -1400,5 +1430,5 @@ try {
 loadVoices();
 renderOfflineBooks();
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/service-worker.js?v=3").catch(() => {});
+  navigator.serviceWorker.register("/service-worker.js?v=4").catch(() => {});
 }
