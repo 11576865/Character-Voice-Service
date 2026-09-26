@@ -1472,5 +1472,5 @@ try {
 loadVoices();
 renderOfflineBooks();
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/service-worker.js?v=5").catch(() => {});
+  navigator.serviceWorker.register("/service-worker.js?v=6").catch(() => {});
 }

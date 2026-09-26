@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Character Voice Service Reader</title>
   <link rel="icon" type="image/svg+xml" href="/reader-assets/favicon.svg?v=3">
-  <link rel="stylesheet" href="/reader-assets/reader.css?v=4">
+  <link rel="stylesheet" href="/reader-assets/reader.css?v=5">
 </head>
 <body>
   <header class="app-header">
@@ -28,8 +28,10 @@
       <article><strong>1 · 导入</strong><p>TXT / EPUB 用于听读；文档配音可导入 TXT、Markdown、DOCX。也可直接粘贴文本。</p></article>
       <article><strong>2 · 选声音并试听</strong><p>选角色、模型、参考语音后点“开始”；“试听原始参考”播放已有 WAV，“重新生成当前段落”会发起新推理。</p></article>
       <article><strong>3 · 保存并生成</strong><p>登录私人书库，先“保存当前书籍”，再“整本书一键生成”。已完成段落可在书库中继续播放。</p></article>
-      <article><strong>4 · 带走成品</strong><p>“下载整本书到本设备”供手机网页离线听读；“导出同步 EPUB / 整篇 WAV”会触发浏览器下载。</p></article>
+      <article><strong>4 · 带走成品</strong><p>要在手机离线听读，请用手机打开本站并在手机上点“下载整本书到本设备”。EPUB / WAV 则是独立文件，需另行下载或传到手机。</p></article>
     </div>
+    <div class="guide-note"><strong>电脑关闭后怎样打开网页？</strong><p>先在手机联网时打开本站首页，等页面完成加载，再登录并下载整本书，确认“整书可离线”。之后电脑关闭、手机断网时，从同一浏览器打开已访问过的本站首页；页面由浏览器缓存提供，书籍与音频从本机站点存储读取。首次访问、未下载的段落和重新生成都需要电脑在线。请先用飞行模式实际试开一次；清理浏览器网站数据会失去离线副本。</p></div>
+    <div class="guide-note"><strong>EPUB 和 WAV 怎么用？</strong><p>同步 EPUB 包含文字、压缩音频及对应关系，可保存、传给其他设备，并用支持 EPUB 3 Media Overlays 的阅读器尝试听读；普通 EPUB 阅读器可能只显示文字。整篇 WAV 是连续音频，用普通播放器、剪辑软件或其他设备播放，没有章节文字同步。两种导出都不会自动进入手机的离线网页书库。</p></div>
     <details class="storage-guide" id="storageGuide" open>
       <summary>文件与成品保存在哪里</summary>
       <div class="storage-list">
@@ -168,6 +170,6 @@
   </div>
 
   <audio id="audio" hidden></audio>
-  <script type="module" src="/reader-assets/js/reader.js?v=5"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=6"></script>
 </body>
 </html>
