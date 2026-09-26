@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Character Voice Service Reader</title>
   <link rel="icon" type="image/svg+xml" href="/reader-assets/favicon.svg?v=3">
-  <link rel="stylesheet" href="/reader-assets/reader.css?v=5">
+  <link rel="stylesheet" href="/reader-assets/reader.css?v=7">
 </head>
 <body>
   <header class="app-header">
@@ -61,6 +61,15 @@
     </div>
     <label class="check-row"><input id="continuousEmotion" type="checkbox">试用长篇情绪连续规划</label>
     <div id="speakerSuggestions"></div>
+    <details id="planPanel" class="plan-panel">
+      <summary>生成前预览本章声音安排</summary>
+      <p class="muted">按当前旁白、参考语音和连续规划设置计算。只保存您改动的段落；保存后重新预览，再开始整书生成。</p>
+      <div class="plan-toolbar"><label for="planChapter">章节</label><select id="planChapter"></select>
+        <button id="previewPlan" type="button">计算本章安排</button>
+        <button id="savePlanCorrections" type="button" disabled>保存本章修正</button></div>
+      <div id="planStatus" role="status" aria-live="polite"></div>
+      <div id="planRows" class="plan-rows"></div>
+    </details>
     <div id="jobStatus" role="status"></div>
     <div class="library-columns"><div><h3>电脑书库</h3><nav id="libraryBooks" aria-label="本机书库"></nav></div>
       <div><h3>本设备离线书籍</h3><div id="offlineStorage" class="muted" role="status"></div><nav id="offlineBooks" aria-label="离线书库"></nav></div></div>
@@ -170,6 +179,6 @@
   </div>
 
   <audio id="audio" hidden></audio>
-  <script type="module" src="/reader-assets/js/reader.js?v=8"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=10"></script>
 </body>
 </html>

@@ -49,7 +49,10 @@ const ui = {
   theme: element("theme"), sleepMinutes: element("sleepMinutes"),
   showStoragePaths: element("showStoragePaths"), storageBookPath: element("storageBookPath"),
   storageReferencePath: element("storageReferencePath"), storageRealtimePath: element("storageRealtimePath"),
-  storagePathStatus: element("storagePathStatus")
+  storagePathStatus: element("storagePathStatus"), planPanel: element("planPanel"),
+  planChapter: element("planChapter"), previewPlan: element("previewPlan"),
+  savePlanCorrections: element("savePlanCorrections"), planStatus: element("planStatus"),
+  planRows: element("planRows")
 };
 
 const progressStore = new ProgressStore();
@@ -580,6 +583,7 @@ async function applyParagraphVoice() {
       statusOverride = "段落标注已记录；保存到书库后可跨设备使用。";
     }
   }
+  clearPlanPreview();
   render();
 }
 
@@ -658,6 +662,16 @@ function showDocument(model, metadata, id, label) {
   ui.selectedParagraphLabel.textContent = "点击正文段落以指定角色";
   ui.applyParagraphVoice.disabled = true;
   currentDocument = model;
+  ui.planRows.replaceChildren();
+  ui.planStatus.textContent = "";
+  ui.savePlanCorrections.disabled = true;
+  ui.planChapter.replaceChildren();
+  model.chapters.forEach((chapter, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = `${index + 1}. ${chapter.title}`;
+    ui.planChapter.appendChild(option);
+  });
   documentId = id;
   bookAuthor = metadata.author || "";
   sourceLabel = label;
@@ -1324,6 +1338,144 @@ async function refreshBookVersions() {
   }
 }
 
+function clearPlanPreview() {
+  ui.planRows.replaceChildren();
+  ui.savePlanCorrections.disabled = true;
+  ui.planStatus.textContent = "设置或标注已改变，请重新计算本章安排。";
+}
+
+function planReason(reason) {
+  if (reason === "manual override") return "人工指定参考";
+  if (reason === "fixed reference") return "顶部固定参考";
+  if (reason === "role default") return "角色默认参考";
+  if (reason?.startsWith("continuity:")) return "相邻段落沿用一次";
+  if (reason === "default: ambiguous or no emotion cue") return "情绪线索不明确，使用默认参考";
+  if (reason?.startsWith("default: no reviewed")) return "没有已评级的对应情绪参考，使用默认参考";
+  if (reason?.startsWith("emotion:")) return `按文本情绪自动选择（${reason.slice(8).trim()}）`;
+  return reason || "角色默认参考";
+}
+
+function fillPlanReferences(select, voiceId, selected = "") {
+  select.replaceChildren();
+  const entries = [["", "沿用顶部设置／角色默认"], ["auto", "自动按情绪选参考"]];
+  for (const ref of voiceCatalog.get(voiceId)?.references || []) {
+    entries.push([ref.id, `${ref.name || ref.id} · ${ref.emotion || "未标注"} · ${ref.quality || "未评级"}`]);
+  }
+  for (const [value, label] of entries) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
+  }
+  select.value = entries.some(([value]) => value === selected) ? selected : "";
+}
+
+async function previewBookPlan() {
+  if (!currentBookId || offlineMode) {
+    ui.planStatus.textContent = "请先打开电脑书库中的书籍。";
+    return;
+  }
+  try {
+    const options = playbackOptions();
+    ui.planStatus.textContent = "正在计算本章声音安排……";
+    const response = await libraryFetch(`/v1/books/${currentBookId}/plan`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voice: options.voice, model_id: options.modelId,
+        reference_id: options.referenceId, speed: options.speed,
+        continuous_emotion: ui.continuousEmotion.checked })
+    });
+    const chapter = Number(ui.planChapter.value);
+    const rows = (await response.json()).paragraphs.filter(item =>
+      Number(item.paragraph.split(":")[0]) === chapter);
+    ui.planRows.replaceChildren();
+    ui.savePlanCorrections.disabled = true;
+    for (const item of rows) {
+      const row = document.createElement("article");
+      row.className = "plan-row";
+      row.dataset.paragraph = item.paragraph;
+      const heading = document.createElement("strong");
+      heading.textContent = `第 ${Number(item.paragraph.split(":")[1]) + 1} 段`;
+      const text = document.createElement("p");
+      text.textContent = item.text.length > 180 ? `${item.text.slice(0, 180)}…` : item.text;
+      const actual = document.createElement("p");
+      const role = voiceCatalog.get(item.voice);
+      const reference = role?.references.find(ref => ref.id === item.reference_id);
+      actual.textContent = `拟用：${role?.name || item.voice} · ${reference?.name || item.reference_id} · ${planReason(item.reason)}`;
+      const choices = document.createElement("div");
+      choices.className = "plan-choice";
+      const voiceLabel = document.createElement("label");
+      voiceLabel.textContent = "改用角色";
+      const voiceSelect = document.createElement("select");
+      voiceSelect.className = "plan-voice";
+      for (const [value, label] of [["", `旁白（${voiceCatalog.get(options.voice)?.name || options.voice}）`],
+        ...[...voiceCatalog.values()].map(voice => [voice.id, voice.name || voice.id])]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        voiceSelect.appendChild(option);
+      }
+      const marked = annotations[item.paragraph];
+      voiceSelect.value = marked?.voice || "";
+      voiceLabel.appendChild(voiceSelect);
+      const referenceLabel = document.createElement("label");
+      referenceLabel.textContent = "改用参考";
+      const referenceSelect = document.createElement("select");
+      referenceSelect.className = "plan-reference";
+      fillPlanReferences(referenceSelect, voiceSelect.value || options.voice,
+        marked?.reference_id || "");
+      referenceLabel.appendChild(referenceSelect);
+      const markDirty = () => {
+        row.classList.add("pending");
+        ui.savePlanCorrections.disabled = false;
+        ui.planStatus.textContent = "有待保存的本章修正。";
+      };
+      voiceSelect.addEventListener("change", () => {
+        fillPlanReferences(referenceSelect, voiceSelect.value || options.voice);
+        markDirty();
+      });
+      referenceSelect.addEventListener("change", markDirty);
+      choices.append(voiceLabel, referenceLabel);
+      row.append(heading, text, actual, choices);
+      ui.planRows.appendChild(row);
+    }
+    ui.planStatus.textContent = `${rows.length} 段已预览；绿色边框表示待保存的修正。`;
+  } catch (error) {
+    ui.planStatus.textContent = `预览失败：${error.message}`;
+  }
+}
+
+async function savePlanCorrections() {
+  if (!currentBookId || offlineMode) return;
+  const changed = [...ui.planRows.querySelectorAll(".plan-row.pending")];
+  if (!changed.length) return;
+  const next = { ...annotations };
+  const narrator = playbackOptions().voice;
+  for (const row of changed) {
+    const voice = row.querySelector(".plan-voice").value;
+    const reference = row.querySelector(".plan-reference").value;
+    if (!voice && !reference) delete next[row.dataset.paragraph];
+    else next[row.dataset.paragraph] = { voice: voice || narrator,
+      reference_id: reference || null };
+  }
+  try {
+    await libraryFetch(`/v1/books/${currentBookId}/annotations`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next)
+    });
+    stopForSourceChange();
+    annotations = next;
+    for (const row of changed) {
+      const [chapter, paragraph] = row.dataset.paragraph.split(":").map(Number);
+      await variantStore.clearSelection(variantStore.key(documentId, chapter, paragraph));
+    }
+    renderBody();
+    await previewBookPlan();
+    ui.planStatus.textContent = `${changed.length} 段修正已保存；上方显示更新后的安排。`;
+  } catch (error) {
+    ui.planStatus.textContent = `保存失败：${error.message}`;
+  }
+}
+
 async function generateWholeBook() {
   if (!currentBookId) {
     ui.jobStatus.textContent = "请先把当前书籍保存到书库。";
@@ -1379,6 +1531,7 @@ async function loadSpeakerSuggestions() {
         body: JSON.stringify(annotations)
       });
       renderBody();
+      clearPlanPreview();
       ui.speakerSuggestions.textContent = "所选角色标注已保存。";
     });
     ui.speakerSuggestions.appendChild(apply);
@@ -1387,8 +1540,13 @@ async function loadSpeakerSuggestions() {
 
 ui.voice.addEventListener("change", () => {
   syncCharacterAssets();
+  clearPlanPreview();
   render();
 });
+for (const control of [ui.modelId, ui.referenceId, ui.speed, ui.continuousEmotion,
+  ui.planChapter]) control.addEventListener("change", clearPlanPreview);
+ui.previewPlan.addEventListener("click", previewBookPlan);
+ui.savePlanCorrections.addEventListener("click", savePlanCorrections);
 ui.paragraphVoice.addEventListener("change", fillParagraphReferences);
 ui.applyParagraphVoice.addEventListener("click", applyParagraphVoice);
 ui.addPronunciation.addEventListener("click", () => {
@@ -1473,5 +1631,5 @@ try {
 loadVoices();
 renderOfflineBooks();
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/service-worker.js?v=8").catch(() => {});
+  navigator.serviceWorker.register("/service-worker.js?v=10").catch(() => {});
 }

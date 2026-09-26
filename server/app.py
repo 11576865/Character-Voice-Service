@@ -501,46 +501,93 @@ def select_book_version(book_id: str, segment_id: str, request: SelectionRequest
     return {"selected": request.version_id}
 
 
+def _book_plan(book: dict, settings: dict) -> list[dict]:
+    """Resolve the same paragraph voices and references used by generation."""
+    continuity = {"chapter": None, "voice": None, "paragraph": None,
+                  "reference": None, "reason": None, "held": False}
+    profiles = {}
+    plan = []
+    for segment in book["segments"]:
+        chapter_index = segment["chapterIndex"]
+        paragraph_index = segment["paragraphIndex"]
+        paragraph = (chapter_index, paragraph_index)
+        key = f"{chapter_index}:{paragraph_index}"
+        override = book.get("annotations", {}).get(key, {})
+        voice = override.get("voice") or settings["voice"]
+        model_id = override.get("model_id") or \
+            (settings.get("model_id") if voice == settings["voice"] else None)
+        requested = override.get("reference_id")
+        if not requested:
+            requested = ("auto" if settings.get("reference_id") == "auto" else None) \
+                if voice != settings["voice"] else settings.get("reference_id")
+        if voice not in profiles:
+            profiles[voice] = load_voice_profile(voice)
+        profile = profiles[voice]
+        paragraph_text = book["document"]["chapters"][chapter_index]["paragraphs"][paragraph_index]
+        if continuity["paragraph"] == paragraph and continuity["voice"] == voice:
+            reference_id, reason = continuity["reference"], continuity["reason"]
+        elif requested == "auto":
+            reference_id, reason = choose_reference(profile, paragraph_text)
+            same_context = continuity["chapter"] == chapter_index and continuity["voice"] == voice
+            if settings.get("continuous_emotion") and \
+                    reason.startswith("default: ambiguous or no emotion cue") and \
+                    same_context and continuity["reference"] != profile["default_reference"] and \
+                    not continuity["held"]:
+                reference_id = continuity["reference"]
+                reason = "continuity: held previous reference once"
+                continuity["held"] = True
+            else:
+                continuity["held"] = False
+        else:
+            reference_id = requested or profile["default_reference"]
+            reason = "manual override" if override.get("reference_id") else \
+                ("fixed reference" if requested else "role default")
+            continuity["held"] = True
+        continuity.update(chapter=chapter_index, voice=voice, paragraph=paragraph,
+                          reference=reference_id, reason=reason)
+        text_to_speak = spoken_text(segment["text"], book.get("pronunciations", {}))
+        selection, actual_reference = effective_selection(
+            voice, model_id, reference_id, text_to_speak)
+        plan.append({"segment": segment, "paragraph": key, "text": paragraph_text,
+                     "voice": voice, "reference_id": actual_reference,
+                     "model_id": selection["selected_model"]["id"], "reason": reason,
+                     "spoken_text": text_to_speak, "selection": selection})
+    return plan
+
+
+@app.post("/v1/books/{book_id}/plan", dependencies=[Depends(require_admin)])
+def preview_book_plan(book_id: str, request: GenerationRequest):
+    book = get_book_or_404(book_id)
+    if request.speed <= 0:
+        raise HTTPException(status_code=400, detail="Speed must be positive")
+    plan = _book_plan(book, request.model_dump())
+    paragraphs = []
+    seen = set()
+    for item in plan:
+        if item["paragraph"] in seen:
+            continue
+        seen.add(item["paragraph"])
+        paragraphs.append({key: item[key] for key in
+                           ("paragraph", "text", "voice", "reference_id", "model_id", "reason")})
+    return {"paragraphs": paragraphs}
+
+
 def _generate_book(book_id: str, settings: dict, cancel: threading.Event):
     book = library.get_book(book_id)
     total = len(book["segments"])
     job = {"status": "running", "completed": 0, "total": total,
            "error": None, "settings": settings, "updatedAt": _now_iso()}
     library.set_job(book_id, job)
-    continuity = {"chapter": None, "voice": None, "paragraph": None,
-                  "reference": None, "held": False}
     try:
-        for segment in book["segments"]:
+        for item in _book_plan(book, settings):
             if cancel.is_set():
                 job["status"] = "cancelled"
                 break
-            override = book.get("annotations", {}).get(
-                f"{segment['chapterIndex']}:{segment['paragraphIndex']}", {})
-            voice = override.get("voice") or settings["voice"]
-            model_id = override.get("model_id") or settings.get("model_id")
-            reference_id = override.get("reference_id") or settings.get("reference_id")
-            if reference_id == "auto" and settings.get("continuous_emotion"):
-                paragraph = (segment["chapterIndex"], segment["paragraphIndex"])
-                if continuity["paragraph"] == paragraph and continuity["voice"] == voice:
-                    reference_id = continuity["reference"]
-                else:
-                    profile = load_voice_profile(voice)
-                    paragraph_text = book["document"]["chapters"][segment["chapterIndex"]]["paragraphs"][segment["paragraphIndex"]]
-                    proposed, reason = choose_reference(profile, paragraph_text)
-                    same_context = continuity["chapter"] == segment["chapterIndex"] and \
-                        continuity["voice"] == voice
-                    if reason.startswith("default: ambiguous or no emotion cue") and \
-                            same_context and continuity["reference"] and not continuity["held"]:
-                        reference_id = continuity["reference"]
-                        continuity["held"] = True
-                    else:
-                        reference_id = proposed
-                        continuity["held"] = False
-                    continuity.update(chapter=segment["chapterIndex"], voice=voice,
-                                      paragraph=paragraph, reference=reference_id)
-            text_to_speak = spoken_text(segment["text"], book.get("pronunciations", {}))
-            selection, actual_reference = effective_selection(
-                voice, model_id, reference_id, text_to_speak)
+            segment = item["segment"]
+            voice = item["voice"]
+            text_to_speak = item["spoken_text"]
+            selection = item["selection"]
+            actual_reference = item["reference_id"]
             fingerprint = hashlib.sha256(json.dumps({
                 "text": text_to_speak, "voice": voice,
                 "model": selection["selected_model"],

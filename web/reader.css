@@ -143,6 +143,18 @@ details > summary { cursor: pointer; font-weight: 750; }
 #libraryBooks button, #offlineBooks button { width: 100%; text-align: left; }
 #offlineStorage { margin: -4px 0 12px; font-size: .85rem; }
 #speakerSuggestions { display: grid; gap: 8px; }
+.plan-panel { margin: 14px 0; padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.plan-panel > summary { color: var(--green); }
+.plan-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin: 12px 0; }
+.plan-toolbar select { min-width: 180px; max-width: 100%; }
+#planStatus { color: var(--blue); margin: 8px 0; }
+.plan-rows { display: grid; gap: 10px; }
+.plan-row { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--reader); }
+.plan-row.pending { border-color: var(--green); }
+.plan-row p { margin: 7px 0; color: var(--muted); }
+.plan-row .plan-choice { display: flex; flex-wrap: wrap; gap: 12px; }
+.plan-row label { flex: 1 1 180px; min-width: 0; max-width: 100%; }
+.plan-row select { width: 100%; }
 #jobStatus, #storageNotice, #resumePrompt { color: var(--blue); }
 #jobStatus:not(:empty) { padding: 12px; border-radius: 9px; background: var(--blue-soft); }
 .toolbar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px 13px; }
