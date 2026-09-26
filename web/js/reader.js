@@ -374,6 +374,12 @@ function saveProgress(force = false, audioTime = player.currentTime) {
   });
   lastSaveAt = Date.now();
   ui.storageNotice.hidden = progressStore.available;
+  if (currentBookId && !offlineMode && navigator.onLine) {
+    libraryFetch(`/v1/books/${currentBookId}/progress`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ segmentIndex: position.index, audioTime: time })
+    }).catch(() => {});
+  }
 }
 
 function onQueueChange(snapshot) {
@@ -494,12 +500,6 @@ function renderBody() {
     });
     ui.documentBody.appendChild(section);
   });
-  if (currentBookId && !offlineMode && navigator.onLine) {
-    libraryFetch(`/v1/books/${currentBookId}/progress`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ segmentIndex: position.index, audioTime: time })
-    }).catch(() => {});
-  }
 }
 
 function fillParagraphReferences() {
@@ -1088,6 +1088,7 @@ async function openOfflineBook(bookId) {
   renderBody();
   offlineMode = true;
   ui.jobStatus.textContent = book.ready ? "整本书已可离线听读。" : "部分章节已下载；缺失段落离线不可播放。";
+  render();
 }
 
 async function downloadWholeBook() {
@@ -1472,5 +1473,5 @@ try {
 loadVoices();
 renderOfflineBooks();
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/service-worker.js?v=6").catch(() => {});
+  navigator.serviceWorker.register("/service-worker.js?v=8").catch(() => {});
 }
