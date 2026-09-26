@@ -84,6 +84,36 @@ function flattenToc(items, depth = 0) {
   }
 }
 
+function canRenderBlobFrame() {
+  const marker = "cvs-epub-frame-check";
+  const url = URL.createObjectURL(new Blob([
+    "<!doctype html><html><body>" + marker + "</body></html>"
+  ], { type: "text/html" }));
+  const frame = document.createElement("iframe");
+  frame.setAttribute("sandbox", "allow-same-origin allow-scripts");
+  frame.style.cssText = "position:absolute;width:1px;height:1px;left:-10000px;top:0";
+  document.body.append(frame);
+  return new Promise(resolve => {
+    let finished = false;
+    const finish = result => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      frame.remove();
+      URL.revokeObjectURL(url);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(false), 4000);
+    frame.onload = () => {
+      try {
+        if (frame.contentDocument?.body?.textContent?.includes(marker)) finish(true);
+      } catch (_) { finish(false); }
+    };
+    frame.onerror = () => finish(false);
+    frame.src = url;
+  });
+}
+
 view.addEventListener("load", event => {
   if (!parsed) return;
   try {
@@ -132,6 +162,12 @@ document.getElementById("file").addEventListener("change", async event => {
     const mapped = view.book.sections.filter((_, index) => chapterFor(index) >= 0).length;
     status.textContent = "EPUB 章节路径映射：" + mapped + "/" + parsed.document.chapters.length +
       " 章；正在检查排版内容区…";
+    if (!await canRenderBlobFrame()) {
+      status.textContent = "EPUB 章节路径映射：" + mapped + "/" + parsed.document.chapters.length +
+        " 章；当前浏览器无法载入 EPUB 排版所需的 blob 内嵌框架。";
+      differences.textContent = "本页尚不能验证目录定位和段落高亮。可在普通 Chrome 或 Edge 中打开本页再试；CVS 正式 Reader 仍可继续使用。";
+      return;
+    }
     const navigation = view.goTo(0);
     const outcome = await Promise.race([
       navigation.then(() => "ready"),
