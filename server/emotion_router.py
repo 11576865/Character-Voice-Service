@@ -12,17 +12,26 @@ _CUES = {
 }
 
 
+def emotion_cues(text: str) -> dict[str, list[str]]:
+    """Return literal rule matches, not a claim about the speaker's intent."""
+    normalized = text.casefold()
+    matches = {}
+    for emotion, cues in _CUES.items():
+        found = [cue for cue in cues if (cue in normalized if any(ord(ch) > 127 for ch in cue)
+                 else re.search(r"\b" + re.escape(cue) + r"\b", normalized))]
+        if found:
+            matches[emotion] = found
+    return matches
+
+
 def choose_reference(profile: dict, text: str) -> tuple[str, str]:
     """Return (reference_id, reason); ambiguous text stays on the default."""
     default = profile["default_reference"]
-    normalized = text.casefold()
-    matches = set()
-    for emotion, cues in _CUES.items():
-        if any((cue in normalized if any(ord(ch) > 127 for ch in cue)
-                else re.search(r"\b" + re.escape(cue) + r"\b", normalized)) for cue in cues):
-            matches.add(emotion)
-    if len(matches) != 1:
-        return default, "default: ambiguous or no emotion cue"
+    matches = emotion_cues(text)
+    if not matches:
+        return default, "default: no emotion cue"
+    if len(matches) > 1:
+        return default, "default: conflicting emotion cues"
     emotion = next(iter(matches))
     eligible = [
         (ref_id, ref) for ref_id, ref in profile["references"].items()

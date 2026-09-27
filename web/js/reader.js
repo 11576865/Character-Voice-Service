@@ -33,6 +33,7 @@ const ui = {
   loadLibrary: element("loadLibrary"),
   saveBook: element("saveBook"), generateBook: element("generateBook"),
   continuousEmotion: element("continuousEmotion"),
+  continuitySpan: element("continuitySpan"),
   automaticReference: element("automaticReference"), speakerAnalysis: element("speakerAnalysis"),
   voiceModeStatus: element("voiceModeStatus"),
   cancelGeneration: element("cancelGeneration"), libraryBooks: element("libraryBooks"),
@@ -616,6 +617,7 @@ function render(snapshot = queue.snapshot) {
   ui.referenceId.disabled = active || loading || !ui.referenceId.options.length;
   ui.automaticReference.disabled = active || loading;
   ui.continuousEmotion.disabled = active || loading || !ui.automaticReference.checked;
+  ui.continuitySpan.disabled = active || loading || !ui.continuousEmotion.checked;
   ui.voiceModeStatus.textContent = `${ui.automaticReference.checked ? "自动情绪参考已开启" : "固定参考朗读"}${ui.continuousEmotion.checked ? " · 整书连续情绪规划已开启" : ""}${ui.speakerAnalysis.checked ? " · 章节说话人分析已开启" : ""}；已保存的段落修正优先生效。`;
   ui.speed.disabled = active || loading;
   ui.useManual.disabled = loading;
@@ -1382,7 +1384,9 @@ function planReason(reason) {
   if (reason === "manual override") return "人工指定参考";
   if (reason === "fixed reference") return "顶部固定参考";
   if (reason === "role default") return "角色默认参考";
-  if (reason?.startsWith("continuity:")) return "相邻段落沿用一次";
+  if (reason?.startsWith("continuity:")) return "沿用前文自动选出的参考";
+  if (reason === "default: no emotion cue") return "未匹配情绪线索，使用默认参考";
+  if (reason === "default: conflicting emotion cues") return "匹配到多种情绪，使用默认参考并结束沿用";
   if (reason === "default: ambiguous or no emotion cue") return "情绪线索不明确，使用默认参考";
   if (reason?.startsWith("default: no reviewed")) return "没有已评级的对应情绪参考，使用默认参考";
   if (reason?.startsWith("emotion:")) return `按文本情绪自动选择（${reason.slice(8).trim()}）`;
@@ -1422,6 +1426,7 @@ async function previewBookPlan() {
       body: JSON.stringify({ voice: options.voice, model_id: options.modelId,
         reference_id: options.referenceId, speed: options.speed,
         continuous_emotion: ui.continuousEmotion.checked,
+        continuity_span: Number(ui.continuitySpan.value),
         speaker_analysis: ui.speakerAnalysis.checked })
     });
     const rows = (await response.json()).paragraphs.filter(item =>
@@ -1461,6 +1466,23 @@ async function previewBookPlan() {
         : "说话人建议：没有足够证据，保留旁白";
       const audioState = document.createElement("p");
       audioState.textContent = `音频片段：可复用 ${item.audio?.ready || 0} · 待更新 ${item.audio?.stale || 0} · 未生成 ${item.audio?.missing || 0}；情绪：${reference?.emotion || "未标注"}`;
+      const emotionPlan = document.createElement("p");
+      if (item.emotion_plan) {
+        const plan = item.emotion_plan;
+        const baseline = role?.references.find(ref => ref.id === plan.independent_reference_id);
+        const cues = Object.entries(plan.cues || {}).map(([emotion, words]) =>
+          `${emotion}: ${words.join("、")}`).join("；") || "无";
+        let continuity = "采用当前段落的独立结果";
+        if (plan.carried_from) {
+          const [chapter, paragraph] = plan.carried_from.split(":").map(Number);
+          continuity = `沿用第 ${chapter + 1} 章第 ${paragraph + 1} 段的自动参考，已延续 ${plan.carried_paragraphs} 段`;
+        } else if (plan.transition === "boundary") {
+          continuity = "新的章节、角色、模型或不相邻段落，重新判断";
+        } else if (plan.transition === "limit") {
+          continuity = "已达到沿用上限，回到默认参考";
+        }
+        emotionPlan.textContent = `规则线索：${cues}。逐段选择：${baseline?.name || plan.independent_reference_id}（${planReason(plan.independent_reason)}）。连续安排：${continuity}。`;
+      }
       const choices = document.createElement("div");
       choices.className = "plan-choice";
       const voiceLabel = document.createElement("label");
@@ -1507,7 +1529,7 @@ async function previewBookPlan() {
         choices.appendChild(acceptSuggestion);
       }
       choices.append(voiceLabel, referenceLabel);
-      row.append(selected, heading, text, actual, decision, suggestion, audioState, choices);
+      row.append(selected, heading, text, actual, decision, suggestion, audioState, emotionPlan, choices);
       ui.planRows.appendChild(row);
     }
     ui.planStatus.textContent = `${rows.length} 段已预览；绿色边框表示待保存的修正。`;
@@ -1571,7 +1593,8 @@ async function generateWholeBook(scope = {}) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ voice: options.voice, model_id: options.modelId,
         reference_id: options.referenceId, speed: options.speed,
-        continuous_emotion: ui.continuousEmotion.checked, ...scope })
+        continuous_emotion: ui.continuousEmotion.checked,
+        continuity_span: Number(ui.continuitySpan.value), ...scope })
     });
     await pollJob();
   } catch (error) {
@@ -1657,7 +1680,7 @@ ui.automaticReference.addEventListener("change", () => {
 ui.speakerAnalysis.addEventListener("change", () => render());
 ui.continuousEmotion.addEventListener("change", () => render());
 for (const control of [ui.modelId, ui.referenceId, ui.speed, ui.continuousEmotion, ui.speakerAnalysis,
-  ui.planChapter]) control.addEventListener("change", clearPlanPreview);
+  ui.continuitySpan, ui.planChapter]) control.addEventListener("change", clearPlanPreview);
 ui.previewPlan.addEventListener("click", previewBookPlan);
 ui.savePlanCorrections.addEventListener("click", savePlanCorrections);
 ui.paragraphVoice.addEventListener("change", fillParagraphReferences);

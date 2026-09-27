@@ -105,6 +105,9 @@
       <label class="check-row"><input id="automaticReference" type="checkbox">自动按情绪选择参考语音（试用）</label>
       <p class="muted">线索不明确或缺少已评级参考时，使用该角色默认参考。关闭后恢复上面选择的固定参考；人工段落设置仍优先。</p>
       <label class="check-row"><input id="continuousEmotion" type="checkbox" disabled>整书生成时试用连续情绪规划</label>
+      <label for="continuitySpan">无新情绪线索时，最多沿用后续段落</label>
+      <select id="continuitySpan" disabled><option value="1">1 段（默认）</option><option value="2">2 段</option></select>
+      <p class="muted">仅沿用同角色、同模型、同章节中自动选出的参考。情绪冲突或人工指定参考会结束沿用；章节预览可对照逐段选择与最终安排。规则匹配仅作提示，请核对语境。</p>
       <label class="check-row"><input id="speakerAnalysis" type="checkbox">在章节预览中分析说话人</label>
       <p class="muted">说话人建议需要书库中的书籍。找不到可靠线索时，保留当前声音；已有标注不会被覆盖。</p>
       <button id="suggestSpeakers" type="button">分析全书说话人</button>
@@ -199,6 +202,6 @@
   </div>
 
   <audio id="audio" hidden></audio>
-  <script type="module" src="/reader-assets/js/reader.js?v=14"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=15"></script>
 </body>
 </html>

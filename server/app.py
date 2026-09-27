@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -19,7 +20,7 @@ from pydantic import BaseModel
 
 from server.backends.gpt_sovits import synthesize
 from server.book_library import BookLibrary
-from server.emotion_router import choose_reference
+from server.emotion_router import choose_reference, emotion_cues
 from server.epub_export import export_read_aloud
 from server.document_import import parse_document
 from server.speaker_suggestions import suggest_speakers
@@ -82,6 +83,7 @@ class GenerationRequest(BaseModel):
     reference_id: str | None = None
     speed: float = 1.0
     continuous_emotion: bool = False
+    continuity_span: Literal[1, 2] = 1
     paragraphs: list[str] | None = None
     retry_failed: bool = False
     speaker_analysis: bool = False
@@ -520,8 +522,9 @@ def _book_plan(book: dict, settings: dict,
                chapter_index: int | None = None) -> Iterator[dict]:
     """Resolve the same paragraph voices and references used by generation."""
     chapter_filter = chapter_index
-    continuity = {"chapter": None, "voice": None, "paragraph": None,
-                  "reference": None, "reason": None, "held": False}
+    continuity = {"chapter": None, "voice": None, "paragraph": None, "model": None,
+                  "reference": None, "reason": None, "carried": 0, "anchor": None,
+                  "details": None}
     profiles = {}
     for segment in book["segments"]:
         if chapter_filter is not None and segment["chapterIndex"] != chapter_filter:
@@ -544,31 +547,48 @@ def _book_plan(book: dict, settings: dict,
         paragraph_text = book["document"]["chapters"][chapter_index]["paragraphs"][paragraph_index]
         if continuity["paragraph"] == paragraph and continuity["voice"] == voice:
             reference_id, reason = continuity["reference"], continuity["reason"]
+            details = continuity["details"]
         elif requested == "auto":
             reference_id, reason = choose_reference(profile, paragraph_text)
-            same_context = continuity["chapter"] == chapter_index and continuity["voice"] == voice
+            details = {"independent_reference_id": reference_id, "independent_reason": reason,
+                       "cues": emotion_cues(paragraph_text), "carried_from": None,
+                       "carried_paragraphs": 0, "transition": "independent"}
+            same_context = continuity["chapter"] == chapter_index and \
+                continuity["voice"] == voice and continuity["model"] == model_id and \
+                continuity["paragraph"][1] == paragraph_index - 1
             if settings.get("continuous_emotion") and \
-                    reason.startswith("default: ambiguous or no emotion cue") and \
+                    reason == "default: no emotion cue" and \
                     same_context and continuity["reference"] != profile["default_reference"] and \
-                    not continuity["held"]:
+                    continuity["anchor"] is not None and \
+                    continuity["carried"] < settings.get("continuity_span", 1):
                 reference_id = continuity["reference"]
-                reason = "continuity: held previous reference once"
-                continuity["held"] = True
+                reason = "continuity: held previous automatic reference"
+                continuity["carried"] += 1
+                details.update(carried_from=continuity["anchor"],
+                               carried_paragraphs=continuity["carried"], transition="carried")
             else:
-                continuity["held"] = False
+                if settings.get("continuous_emotion"):
+                    details["transition"] = ("boundary" if not same_context else
+                                             "limit" if reason == "default: no emotion cue" and
+                                             continuity["anchor"] is not None else "independent")
+                continuity["carried"] = 0
+                continuity["anchor"] = key if reason.startswith("emotion:") else None
         else:
             reference_id = requested or profile["default_reference"]
             reason = "manual override" if override.get("reference_id") else \
                 ("fixed reference" if requested else "role default")
-            continuity["held"] = True
+            continuity["carried"] = 0
+            continuity["anchor"] = None
+            details = None
         continuity.update(chapter=chapter_index, voice=voice, paragraph=paragraph,
-                          reference=reference_id, reason=reason)
+                          model=model_id, reference=reference_id, reason=reason, details=details)
         text_to_speak = spoken_text(segment["text"], book.get("pronunciations", {}))
         selection, actual_reference = effective_selection(
             voice, model_id, reference_id, text_to_speak)
         yield {"segment": segment, "paragraph": key, "text": paragraph_text,
                "voice": voice, "reference_id": actual_reference,
                "model_id": selection["selected_model"]["id"], "reason": reason,
+               "emotion_plan": details,
                "spoken_text": text_to_speak, "selection": selection}
 
 
@@ -626,7 +646,7 @@ def preview_book_plan(book_id: str, request: GenerationRequest,
     for item in plan:
         row = paragraphs.setdefault(item["paragraph"], {
             **{key: item[key] for key in
-               ("paragraph", "text", "voice", "reference_id", "model_id", "reason")},
+               ("paragraph", "text", "voice", "reference_id", "model_id", "reason", "emotion_plan")},
             "speakerSuggestion": speaker_suggestions.get(item["paragraph"]),
             "audio": {"ready": 0, "stale": 0, "missing": 0}})
         row["audio"][_audio_state(book_id, item, settings, versions)] += 1
