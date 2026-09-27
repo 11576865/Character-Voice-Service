@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "roots": [
+    {
+      "id": "local-gpt-sovits",
+      "engine": "gpt-sovits",
+      "path": "D:/VoiceModels/GPT-SoVITS"
+    }
+  ]
+}

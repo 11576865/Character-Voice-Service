@@ -281,6 +281,8 @@ Python 测试：
 
 ## 接下来的主线
 
+模型升级基础设施的完整设计见 [实施报告 TXT](docs/CVS_Model_Management_Implementation_Report.txt)。已提供 [Model Root 只读扫描工具](docs/model-scanner.md)，用于盘点 GPT-SoVITS 权重、关联现有角色及报告无法唯一配对的版本；候选登记、生命周期与统一 Evaluation 按报告分阶段接入。
+
 当前工作分成两条并行线：
 
 1. 在 HSR-Voice-Archive-Builder 中试听并筛选真实 Reference Pack；
