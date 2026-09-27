@@ -84,6 +84,7 @@ class GenerationRequest(BaseModel):
     continuous_emotion: bool = False
     paragraphs: list[str] | None = None
     retry_failed: bool = False
+    speaker_analysis: bool = False
 
 
 class SelectionRequest(BaseModel):
@@ -618,7 +619,7 @@ def preview_book_plan(book_id: str, request: GenerationRequest,
         raise HTTPException(status_code=400, detail="Invalid chapter index")
     plan = _book_plan(book, request.model_dump(), chapter_index)
     speaker_suggestions = {item["paragraph"]: item for item in
-                           suggest_speakers(book, voices()["voices"])}
+                           suggest_speakers(book, voices()["voices"])} if request.speaker_analysis else {}
     paragraphs = {}
     versions = library.versions(book_id)
     settings = request.model_dump()

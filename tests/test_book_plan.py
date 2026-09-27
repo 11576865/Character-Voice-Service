@@ -84,12 +84,22 @@ def test_preview_includes_unlocked_speaker_suggestion(tmp_path, monkeypatch):
         {"id": "a", "name": "Alpha"}, {"id": "b", "name": "Beta"}]})
     client = TestClient(app_module.app)
     response = client.post(f"/v1/books/{book['id']}/plan",
-                           json={"voice": "a", "reference_id": "a-neutral"},
+                           json={"voice": "a", "reference_id": "a-neutral", "speaker_analysis": True},
                            headers={"X-CVS-Token": app_module.ADMIN_TOKEN})
     assert response.status_code == 200
     suggestion = response.json()["paragraphs"][0]["speakerSuggestion"]
     assert (suggestion["voice"], suggestion["confidence"], suggestion["reason"]) == \
         ("a", "high", "explicit_prefix")
+    def unexpected_analysis(*args):
+        raise AssertionError("Basic preview must not analyze speakers")
+    monkeypatch.setattr(app_module, "suggest_speakers", unexpected_analysis)
+    basic = client.post(f"/v1/books/{book['id']}/plan",
+                        json={"voice": "a", "reference_id": "a-neutral"},
+                        headers={"X-CVS-Token": app_module.ADMIN_TOKEN})
+    assert basic.status_code == 200
+    assert basic.json()["paragraphs"][0]["speakerSuggestion"] is None
+    assert basic.json()["paragraphs"][0]["voice"] == "a"
+    assert basic.json()["paragraphs"][0]["reference_id"] == "a-neutral"
 
 
 def test_generation_uses_previewed_roles_and_references(tmp_path, monkeypatch):

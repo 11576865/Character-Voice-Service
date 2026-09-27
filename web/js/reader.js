@@ -33,6 +33,8 @@ const ui = {
   loadLibrary: element("loadLibrary"),
   saveBook: element("saveBook"), generateBook: element("generateBook"),
   continuousEmotion: element("continuousEmotion"),
+  automaticReference: element("automaticReference"), speakerAnalysis: element("speakerAnalysis"),
+  voiceModeStatus: element("voiceModeStatus"),
   cancelGeneration: element("cancelGeneration"), libraryBooks: element("libraryBooks"),
   jobStatus: element("jobStatus"), downloadBook: element("downloadBook"),
   offlineBooks: element("offlineBooks"), offlineStorage: element("offlineStorage"),
@@ -353,7 +355,7 @@ function playbackOptions() {
   return {
     voice: ui.voice.value,
     modelId: ui.modelId.value || null,
-    referenceId: ui.referenceId.value || null,
+    referenceId: ui.automaticReference.checked ? "auto" : ui.referenceId.value || null,
     speed
   };
 }
@@ -612,6 +614,9 @@ function render(snapshot = queue.snapshot) {
   ui.voice.disabled = active || loading || !ui.voice.value;
   ui.modelId.disabled = active || loading || !ui.modelId.options.length;
   ui.referenceId.disabled = active || loading || !ui.referenceId.options.length;
+  ui.automaticReference.disabled = active || loading;
+  ui.continuousEmotion.disabled = active || loading || !ui.automaticReference.checked;
+  ui.voiceModeStatus.textContent = `${ui.automaticReference.checked ? "自动情绪参考已开启" : "固定参考朗读"}${ui.continuousEmotion.checked ? " · 整书连续情绪规划已开启" : ""}${ui.speakerAnalysis.checked ? " · 章节说话人分析已开启" : ""}；已保存的段落修正优先生效。`;
   ui.speed.disabled = active || loading;
   ui.useManual.disabled = loading;
   ui.previousSegment.disabled = !hasDocument || loading || awaitingChoice || index <= 0;
@@ -649,7 +654,7 @@ function render(snapshot = queue.snapshot) {
     finished: `朗读完成，共 ${snapshot.total} 个片段。`
   };
   const choice = selectedReferences.get(index);
-  const choiceLabel = choice?.id && ui.referenceId.value === "auto"
+  const choiceLabel = choice?.id && ui.automaticReference.checked
     ? ` · 参考：${choice.id}（${choice.reason || "自动"}）` : "";
   ui.status.textContent = statusOverride || (loading ? "正在读取文件……" : messages[snapshot.state] + choiceLabel);
   renderStoragePaths();
@@ -986,10 +991,6 @@ function syncCharacterAssets() {
         : (item.name || item.id);
     }
   );
-  const automatic = document.createElement("option");
-  automatic.value = "auto";
-  automatic.textContent = "自动按情绪选参考（试用）";
-  ui.referenceId.appendChild(automatic);
 }
 
 function installVoices(data) {
@@ -1420,7 +1421,8 @@ async function previewBookPlan() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ voice: options.voice, model_id: options.modelId,
         reference_id: options.referenceId, speed: options.speed,
-        continuous_emotion: ui.continuousEmotion.checked })
+        continuous_emotion: ui.continuousEmotion.checked,
+        speaker_analysis: ui.speakerAnalysis.checked })
     });
     const rows = (await response.json()).paragraphs.filter(item =>
       Number(item.paragraph.split(":")[0]) === chapter);
@@ -1451,10 +1453,10 @@ async function previewBookPlan() {
       decision.className = marked ? "plan-locked" : "";
       decision.textContent = marked
         ? `当前角色决定：${marked.source === "suggestion" ? "已确认自动建议" : "人工锁定"}，后续分析不会覆盖`
-        : "当前角色决定：旁白；可查看并采用下方自动建议";
+        : "当前角色决定：使用基础朗读中选择的声音。";
       const suggestion = document.createElement("p");
       suggestion.className = "plan-speaker-suggestion";
-      suggestion.textContent = item.speakerSuggestion
+      suggestion.textContent = marked ? "已有段落修正，保留当前决定。" : !ui.speakerAnalysis.checked ? "" : item.speakerSuggestion
         ? `说话人建议：${item.speakerSuggestion.voiceName} · ${speakerConfidence(item.speakerSuggestion.confidence)} · ${item.speakerSuggestion.evidence}`
         : "说话人建议：没有足够证据，保留旁白";
       const audioState = document.createElement("p");
@@ -1578,13 +1580,16 @@ async function generateWholeBook(scope = {}) {
 }
 
 async function loadSpeakerSuggestions() {
-  if (!currentBookId || offlineMode) return;
+  if (!currentBookId || offlineMode) {
+    ui.speakerSuggestions.textContent = "请先登录并打开电脑书库中的书籍，再分析说话人。";
+    return;
+  }
   try {
     const payload = await (await libraryFetch(
       `/v1/books/${currentBookId}/speaker-suggestions`)).json();
     ui.speakerSuggestions.replaceChildren();
     if (!payload.suggestions.length) {
-      ui.speakerSuggestions.textContent = "没有找到尚未标注的明确角色名。";
+      ui.speakerSuggestions.textContent = "没有需要确认的可靠说话人建议。可以直接使用当前声音生成；已有段落标注继续保留。";
       return;
     }
     const summary = document.createElement("p");
@@ -1644,7 +1649,14 @@ ui.voice.addEventListener("change", () => {
   clearPlanPreview();
   render();
 });
-for (const control of [ui.modelId, ui.referenceId, ui.speed, ui.continuousEmotion,
+ui.automaticReference.addEventListener("change", () => {
+  if (!ui.automaticReference.checked) ui.continuousEmotion.checked = false;
+  clearPlanPreview();
+  render();
+});
+ui.speakerAnalysis.addEventListener("change", () => render());
+ui.continuousEmotion.addEventListener("change", () => render());
+for (const control of [ui.modelId, ui.referenceId, ui.speed, ui.continuousEmotion, ui.speakerAnalysis,
   ui.planChapter]) control.addEventListener("change", clearPlanPreview);
 ui.previewPlan.addEventListener("click", previewBookPlan);
 ui.savePlanCorrections.addEventListener("click", savePlanCorrections);

@@ -27,7 +27,7 @@
     <div class="guide-grid">
       <article><strong>1 · 导入</strong><p>TXT / EPUB 用于听读；文档配音可导入 TXT、Markdown、DOCX。也可直接粘贴文本。</p></article>
       <article><strong>2 · 选声音并试听</strong><p>选角色、模型、参考语音后点“开始”；“试听原始参考”播放已有 WAV，“重新生成当前段落”会发起新推理。</p></article>
-      <article><strong>3 · 保存并生成</strong><p>登录私人书库，先“保存当前书籍”，再“整本书一键生成”。已完成段落可在书库中继续播放。</p></article>
+      <article><strong>3 · 保存并生成</strong><p>登录私人书库，先“保存当前书籍”，再“生成全书／补齐缺失与已修改段落”。已完成段落可在书库中继续播放。</p></article>
       <article><strong>4 · 带走成品</strong><p>要在手机离线听读，请用手机打开本站并在手机上点“下载整本书到本设备”。EPUB / WAV 则是独立文件，需另行下载或传到手机。</p></article>
     </div>
     <div class="guide-note"><strong>电脑关闭后怎样打开网页？</strong><p>先在手机联网时打开本站首页，等页面完成加载，再登录并下载整本书，确认“整书可离线”。之后电脑关闭、手机断网时，从同一浏览器打开已访问过的本站首页；页面由浏览器缓存提供，书籍与音频从本机站点存储读取。首次访问、未下载的段落和重新生成都需要电脑在线。请先用飞行模式实际试开一次；清理浏览器网站数据会失去离线副本。</p></div>
@@ -58,13 +58,10 @@
       <button id="cancelGeneration" class="button-danger">取消生成</button>
       <button id="downloadBook">下载整本书到本设备</button>
       <button id="exportEpub">导出同步 EPUB</button><button id="exportWav">导出整篇 WAV</button>
-      <button id="suggestSpeakers">分析全书说话人</button>
     </div>
-    <label class="check-row"><input id="continuousEmotion" type="checkbox">试用长篇情绪连续规划</label>
-    <div id="speakerSuggestions"></div>
     <details id="planPanel" class="plan-panel">
       <summary>生成前预览本章声音安排</summary>
-      <p class="muted">按当前旁白、人工标注、说话人建议、参考语音和连续规划设置计算。自动建议不会覆盖已标注段落；请确认后再保存和生成。</p>
+      <p class="muted">按当前声音设置和已保存的段落修正计算。需要说话人建议时，在“智能编排”中开启预览分析；建议经确认保存后才用于生成。</p>
       <div class="plan-toolbar"><label for="planChapter">章节</label><select id="planChapter"></select>
         <button id="previewPlan" type="button">计算本章安排</button>
         <button id="savePlanCorrections" type="button" disabled>保存本章修正</button></div>
@@ -87,7 +84,7 @@
   </details>
 
   <section class="surface setup-panel" id="setupPanel" aria-label="导入与声音设置">
-    <div class="section-heading"><div><span class="step">01 / SETUP</span><h2>导入与声音</h2></div><p>先选内容，再选角色、模型和参考语音。</p></div>
+    <div class="section-heading"><div><span class="step">01 / SETUP</span><h2>基础朗读 · 导入与声音</h2></div><p>教材、论文、小说都从这里开始：导入内容，选一个声音和固定参考，再点击“开始”。</p></div>
     <div class="toolbar">
     <div><label for="txtFile">TXT 文件</label><input id="txtFile" type="file" accept=".txt,text/plain"></div>
     <div><label for="epubFile">EPUB 文件</label><input id="epubFile" type="file" accept=".epub,application/epub+zip"></div>
@@ -101,6 +98,18 @@
     </div>
     <div><label for="speed">速度</label><input id="speed" type="number" min="0.1" step="0.1" value="1.0"></div>
   </div>
+    <p id="voiceModeStatus" class="muted" role="status">固定参考朗读；已保存的段落修正优先生效。</p>
+    <details id="intelligentPanel" class="plan-panel">
+      <summary>智能编排 · 可选增强</summary>
+      <p class="muted">需要时开启以下功能。折叠此区域不会关闭已启用的选项；上方会显示当前状态。</p>
+      <label class="check-row"><input id="automaticReference" type="checkbox">自动按情绪选择参考语音（试用）</label>
+      <p class="muted">线索不明确或缺少已评级参考时，使用该角色默认参考。关闭后恢复上面选择的固定参考；人工段落设置仍优先。</p>
+      <label class="check-row"><input id="continuousEmotion" type="checkbox" disabled>整书生成时试用连续情绪规划</label>
+      <label class="check-row"><input id="speakerAnalysis" type="checkbox">在章节预览中分析说话人</label>
+      <p class="muted">说话人建议需要书库中的书籍。找不到可靠线索时，保留当前声音；已有标注不会被覆盖。</p>
+      <button id="suggestSpeakers" type="button">分析全书说话人</button>
+      <div id="speakerSuggestions" role="status" aria-live="polite"></div>
+    </details>
   </section>
 
   <details id="manualPanel" class="surface">
@@ -190,6 +199,6 @@
   </div>
 
   <audio id="audio" hidden></audio>
-  <script type="module" src="/reader-assets/js/reader.js?v=13"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=14"></script>
 </body>
 </html>

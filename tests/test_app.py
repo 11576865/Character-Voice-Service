@@ -88,7 +88,7 @@ def test_reader_modules_are_served():
     assert 'id="storageBookPath"' in page.text
     assert 'id="showStoragePaths"' in page.text
     assert "/reader-assets/reader.css?v=8" in page.text
-    assert "/reader-assets/js/reader.js?v=13" in page.text
+    assert "/reader-assets/js/reader.js?v=14" in page.text
     assert module.status_code == 200
     assert "javascript" in module.headers["content-type"]
     assert stylesheet.status_code == 200
