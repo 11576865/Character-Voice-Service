@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Character Voice Service Reader</title>
   <link rel="icon" type="image/svg+xml" href="/reader-assets/favicon.svg?v=3">
-  <link rel="stylesheet" href="/reader-assets/reader.css?v=7">
+  <link rel="stylesheet" href="/reader-assets/reader.css?v=8">
 </head>
 <body>
   <header class="app-header">
@@ -58,13 +58,13 @@
       <button id="cancelGeneration" class="button-danger">取消生成</button>
       <button id="downloadBook">下载整本书到本设备</button>
       <button id="exportEpub">导出同步 EPUB</button><button id="exportWav">导出整篇 WAV</button>
-      <button id="suggestSpeakers">查找明确的角色标记</button>
+      <button id="suggestSpeakers">分析全书说话人</button>
     </div>
     <label class="check-row"><input id="continuousEmotion" type="checkbox">试用长篇情绪连续规划</label>
     <div id="speakerSuggestions"></div>
     <details id="planPanel" class="plan-panel">
       <summary>生成前预览本章声音安排</summary>
-      <p class="muted">按当前旁白、参考语音和连续规划设置计算。只保存您改动的段落；保存后重新预览，再开始整书生成。</p>
+      <p class="muted">按当前旁白、人工标注、说话人建议、参考语音和连续规划设置计算。自动建议不会覆盖已标注段落；请确认后再保存和生成。</p>
       <div class="plan-toolbar"><label for="planChapter">章节</label><select id="planChapter"></select>
         <button id="previewPlan" type="button">计算本章安排</button>
         <button id="savePlanCorrections" type="button" disabled>保存本章修正</button></div>
@@ -190,6 +190,6 @@
   </div>
 
   <audio id="audio" hidden></audio>
-  <script type="module" src="/reader-assets/js/reader.js?v=12"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=13"></script>
 </body>
 </html>

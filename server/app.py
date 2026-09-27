@@ -617,6 +617,8 @@ def preview_book_plan(book_id: str, request: GenerationRequest,
     if chapter_index is not None and not 0 <= chapter_index < len(book["document"]["chapters"]):
         raise HTTPException(status_code=400, detail="Invalid chapter index")
     plan = _book_plan(book, request.model_dump(), chapter_index)
+    speaker_suggestions = {item["paragraph"]: item for item in
+                           suggest_speakers(book, voices()["voices"])}
     paragraphs = {}
     versions = library.versions(book_id)
     settings = request.model_dump()
@@ -624,6 +626,7 @@ def preview_book_plan(book_id: str, request: GenerationRequest,
         row = paragraphs.setdefault(item["paragraph"], {
             **{key: item[key] for key in
                ("paragraph", "text", "voice", "reference_id", "model_id", "reason")},
+            "speakerSuggestion": speaker_suggestions.get(item["paragraph"]),
             "audio": {"ready": 0, "stale": 0, "missing": 0}})
         row["audio"][_audio_state(book_id, item, settings, versions)] += 1
     return {"paragraphs": list(paragraphs.values())}

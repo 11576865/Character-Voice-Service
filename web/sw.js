@@ -1,6 +1,6 @@
-const CACHE = "cvs-reader-shell-v12";
-const SHELL = ["/", "/reader-assets/reader.css?v=7", "/reader-assets/favicon.svg?v=3",
-  "/reader-assets/js/reader.js?v=12", "/reader-assets/js/sources.js",
+const CACHE = "cvs-reader-shell-v13";
+const SHELL = ["/", "/reader-assets/reader.css?v=8", "/reader-assets/favicon.svg?v=3",
+  "/reader-assets/js/reader.js?v=13", "/reader-assets/js/sources.js",
   "/reader-assets/js/epub_source.js", "/reader-assets/js/segmenter.js",
   "/reader-assets/js/player.js", "/reader-assets/js/queue.js",
   "/reader-assets/js/progress.js?v=4", "/reader-assets/js/navigation.js",

@@ -562,7 +562,7 @@ async function applyParagraphVoice() {
   const key = annotationKey(selectedParagraph.chapterIndex, selectedParagraph.paragraphIndex);
   if (ui.paragraphVoice.value) {
     annotations[key] = { voice: ui.paragraphVoice.value,
-      reference_id: ui.paragraphReference.value || null };
+      reference_id: ui.paragraphReference.value || null, source: "manual", locked: true };
   } else {
     delete annotations[key];
   }
@@ -1388,6 +1388,10 @@ function planReason(reason) {
   return reason || "角色默认参考";
 }
 
+function speakerConfidence(confidence) {
+  return confidence === "high" ? "高把握" : "中等把握";
+}
+
 function fillPlanReferences(select, voiceId, selected = "") {
   select.replaceChildren();
   const entries = [["", "沿用顶部设置／角色默认"], ["auto", "自动按情绪选参考"]];
@@ -1441,7 +1445,18 @@ async function previewBookPlan() {
       const actual = document.createElement("p");
       const role = voiceCatalog.get(item.voice);
       const reference = role?.references.find(ref => ref.id === item.reference_id);
+      const marked = annotations[item.paragraph];
       actual.textContent = `拟用：${role?.name || item.voice} · ${reference?.name || item.reference_id} · ${planReason(item.reason)}`;
+      const decision = document.createElement("p");
+      decision.className = marked ? "plan-locked" : "";
+      decision.textContent = marked
+        ? `当前角色决定：${marked.source === "suggestion" ? "已确认自动建议" : "人工锁定"}，后续分析不会覆盖`
+        : "当前角色决定：旁白；可查看并采用下方自动建议";
+      const suggestion = document.createElement("p");
+      suggestion.className = "plan-speaker-suggestion";
+      suggestion.textContent = item.speakerSuggestion
+        ? `说话人建议：${item.speakerSuggestion.voiceName} · ${speakerConfidence(item.speakerSuggestion.confidence)} · ${item.speakerSuggestion.evidence}`
+        : "说话人建议：没有足够证据，保留旁白";
       const audioState = document.createElement("p");
       audioState.textContent = `音频片段：可复用 ${item.audio?.ready || 0} · 待更新 ${item.audio?.stale || 0} · 未生成 ${item.audio?.missing || 0}；情绪：${reference?.emotion || "未标注"}`;
       const choices = document.createElement("div");
@@ -1457,7 +1472,6 @@ async function previewBookPlan() {
         option.textContent = label;
         voiceSelect.appendChild(option);
       }
-      const marked = annotations[item.paragraph];
       voiceSelect.value = marked?.voice || "";
       voiceLabel.appendChild(voiceSelect);
       const referenceLabel = document.createElement("label");
@@ -1473,12 +1487,25 @@ async function previewBookPlan() {
         ui.planStatus.textContent = "有待保存的本章修正。";
       };
       voiceSelect.addEventListener("change", () => {
+        delete row.dataset.suggestionAccepted;
         fillPlanReferences(referenceSelect, voiceSelect.value || options.voice);
         markDirty();
       });
       referenceSelect.addEventListener("change", markDirty);
+      if (item.speakerSuggestion) {
+        const acceptSuggestion = document.createElement("button");
+        acceptSuggestion.type = "button";
+        acceptSuggestion.textContent = "采用说话人建议";
+        acceptSuggestion.addEventListener("click", () => {
+          voiceSelect.value = item.speakerSuggestion.voice;
+          fillPlanReferences(referenceSelect, item.speakerSuggestion.voice);
+          row.dataset.suggestionAccepted = "true";
+          markDirty();
+        });
+        choices.appendChild(acceptSuggestion);
+      }
       choices.append(voiceLabel, referenceLabel);
-      row.append(selected, heading, text, actual, audioState, choices);
+      row.append(selected, heading, text, actual, decision, suggestion, audioState, choices);
       ui.planRows.appendChild(row);
     }
     ui.planStatus.textContent = `${rows.length} 段已预览；绿色边框表示待保存的修正。`;
@@ -1500,7 +1527,9 @@ async function savePlanCorrections() {
     const reference = row.querySelector(".plan-reference").value;
     if (!voice && !reference) delete next[row.dataset.paragraph];
     else next[row.dataset.paragraph] = { voice: voice || narrator,
-      reference_id: reference || null };
+      reference_id: reference || null,
+      source: row.dataset.suggestionAccepted === "true" ? "suggestion" : "manual",
+      locked: true };
   }
   try {
     await libraryFetch(`/v1/books/${currentBookId}/annotations`, {
@@ -1558,34 +1587,53 @@ async function loadSpeakerSuggestions() {
       ui.speakerSuggestions.textContent = "没有找到尚未标注的明确角色名。";
       return;
     }
+    const summary = document.createElement("p");
+    const highCount = payload.suggestions.filter(item => item.confidence === "high").length;
+    summary.textContent = `找到 ${payload.suggestions.length} 条建议，其中 ${highCount} 条高把握。已标注段落被锁定，不会出现在建议中。`;
+    ui.speakerSuggestions.appendChild(summary);
     for (const suggestion of payload.suggestions) {
       const label = document.createElement("label");
+      label.className = "speaker-suggestion";
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
-      checkbox.checked = true;
+      checkbox.checked = suggestion.confidence === "high";
       checkbox.dataset.paragraph = suggestion.paragraph;
       checkbox.dataset.voice = suggestion.voice;
-      label.append(checkbox, `${suggestion.voice} · ${suggestion.text}`);
+      const title = document.createElement("span");
+      title.className = `speaker-confidence-${suggestion.confidence}`;
+      title.textContent = `${suggestion.voiceName || suggestion.voice} · ${speakerConfidence(suggestion.confidence)}`;
+      const detail = document.createElement("small");
+      detail.textContent = `${suggestion.evidence} · ${suggestion.text}`;
+      label.append(checkbox, title, detail);
       ui.speakerSuggestions.appendChild(label);
     }
     const apply = document.createElement("button");
-    apply.textContent = "确认所选角色标注";
+    apply.textContent = "确认勾选建议（默认只勾高把握）";
     apply.addEventListener("click", async () => {
-      for (const checkbox of ui.speakerSuggestions.querySelectorAll("input:checked")) {
-        if (!annotations[checkbox.dataset.paragraph]) {
-          annotations[checkbox.dataset.paragraph] = { voice: checkbox.dataset.voice,
-            reference_id: null };
+      const next = { ...annotations };
+      const accepted = [...ui.speakerSuggestions.querySelectorAll("input:checked")];
+      if (!accepted.length) {
+        ui.speakerSuggestions.append("请至少勾选一条建议。");
+        return;
+      }
+      for (const checkbox of accepted) {
+        if (!next[checkbox.dataset.paragraph]) {
+          next[checkbox.dataset.paragraph] = { voice: checkbox.dataset.voice,
+            reference_id: null, source: "suggestion", locked: true };
           const [chapterIndex, paragraphIndex] = checkbox.dataset.paragraph.split(":").map(Number);
           await variantStore.clearSelection(variantStore.key(documentId, chapterIndex, paragraphIndex));
         }
       }
       await libraryFetch(`/v1/books/${currentBookId}/annotations`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(annotations)
+        body: JSON.stringify(next)
       });
+      stopForSourceChange();
+      annotations = next;
       renderBody();
       clearPlanPreview();
-      ui.speakerSuggestions.textContent = "所选角色标注已保存。";
+      await refreshProductionStatus();
+      ui.speakerSuggestions.textContent = `${accepted.length} 条角色建议已确认并锁定；相关旧音频将在下次补齐时更新。`;
     });
     ui.speakerSuggestions.appendChild(apply);
   } catch (error) { ui.speakerSuggestions.textContent = `角色建议失败：${error.message}`; }

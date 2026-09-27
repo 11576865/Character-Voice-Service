@@ -71,6 +71,27 @@ def test_preview_is_private_and_other_role_uses_its_own_default(tmp_path, monkey
                        headers={"X-CVS-Token": app_module.ADMIN_TOKEN}).status_code == 400
 
 
+def test_preview_includes_unlocked_speaker_suggestion(tmp_path, monkeypatch):
+    _profiles(monkeypatch)
+    library = BookLibrary(tmp_path)
+    text = "Alpha: hello"
+    document = {"title": "Suggestion", "chapters": [{"title": "One", "paragraphs": [text]}]}
+    book = library.put_book(document, [{"chapterIndex": 0, "paragraphIndex": 0,
+                                        "start": 0, "end": len(text), "text": text}],
+                            kind="manual")
+    monkeypatch.setattr(app_module, "library", library)
+    monkeypatch.setattr(app_module, "voices", lambda: {"voices": [
+        {"id": "a", "name": "Alpha"}, {"id": "b", "name": "Beta"}]})
+    client = TestClient(app_module.app)
+    response = client.post(f"/v1/books/{book['id']}/plan",
+                           json={"voice": "a", "reference_id": "a-neutral"},
+                           headers={"X-CVS-Token": app_module.ADMIN_TOKEN})
+    assert response.status_code == 200
+    suggestion = response.json()["paragraphs"][0]["speakerSuggestion"]
+    assert (suggestion["voice"], suggestion["confidence"], suggestion["reason"]) == \
+        ("a", "high", "explicit_prefix")
+
+
 def test_generation_uses_previewed_roles_and_references(tmp_path, monkeypatch):
     _profiles(monkeypatch)
     library = BookLibrary(tmp_path)
