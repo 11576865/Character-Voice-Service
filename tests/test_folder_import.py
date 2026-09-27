@@ -1,6 +1,7 @@
 import json
 import hashlib
 import wave
+import pytest
 
 from server.folder_import import apply_import, plan_import
 
@@ -12,6 +13,27 @@ def _wav(path):
         stream.setsampwidth(2)
         stream.setframerate(16000)
         stream.writeframes(b"\x00\x00" * 160)
+
+
+def test_mixed_model_versions_and_english_suffix(tmp_path):
+    source, root = tmp_path / "source", tmp_path / "models"
+    for role, stem, version in [("芙宁娜", "芙宁娜_EN", "v4"), ("花火", "花火", "v2Pro")]:
+        _wav(source / role / "reference_audios" / "英语" / "emotions" / "【默认】Hello.wav")
+        for folder, filename in [(f"GPT_weights_{version}", f"{stem}-e10.ckpt"),
+                                 (f"SoVITS_weights_{version}", f"{stem}_e10_s100.pth")]:
+            (root / folder).mkdir(parents=True, exist_ok=True)
+            (root / folder / filename).write_bytes(b"model")
+    plan = plan_import(source, root, voice_dir=tmp_path / "voices", reference_dir=tmp_path / "refs")
+    profiles = {item["id"]: item["data"] for item in plan}
+    assert profiles["furina"]["default_model"] == "v4-local"
+    assert profiles["sparkle"]["default_model"] == "v2Pro-local"
+    assert profiles["furina"]["references"][profiles["furina"]["default_reference"]]["emotion"] == "neutral"
+    only = plan_import(source, root, voice_dir=tmp_path / "voices", reference_dir=tmp_path / "refs",
+                       roles={"花火"})
+    assert [item["id"] for item in only] == ["sparkle"]
+    (root / "GPT_weights_v2Pro" / "花火-e20.ckpt").write_bytes(b"second")
+    with pytest.raises(ValueError, match="ambiguous"):
+        plan_import(source, root, voice_dir=tmp_path / "voices", reference_dir=tmp_path / "refs")
 
 
 def test_imports_character_folders_and_reimports_without_duplicates(tmp_path):

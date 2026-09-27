@@ -16,7 +16,7 @@ EMOTIONS = {
     "中立": "neutral", "开心": "happy", "高兴": "happy", "难过": "sad",
     "悲伤": "sad", "生气": "angry", "愤怒": "angry", "恐惧": "fear",
     "害怕": "fear", "吃惊": "surprised", "惊讶": "surprised",
-    "厌恶": "disgust", "其他": "other",
+    "厌恶": "disgust", "其他": "other", "默认": "neutral",
 }
 LANGUAGES = {"英语": "en", "中文": "zh", "日语": "ja", "English": "en", "Chinese": "zh", "Japanese": "ja"}
 NAME_RE = re.compile(r"^【([^】]+)】\s*(.+)$")
@@ -24,6 +24,8 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DEFAULT_ROLE_IDS = {
     "三月七": "march-7th", "开拓者(女)": "trailblazer-female",
     "砂金": "aventurine", "银狼": "silver-wolf",
+    "芙宁娜": "furina", "花火": "sparkle", "开拓者(男)": "trailblazer-male",
+    "那刻夏": "anaxa", "星期日": "sunday", "昔涟": "cyrene", "刻律德菈": "cerydra",
 }
 
 
@@ -62,9 +64,27 @@ def _existing_profile(source_root: Path, target: Path) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
+def _model_pair(root: Path, role: str) -> tuple[str, Path, Path]:
+    candidates = []
+    for version in ("v4", "v2Pro"):
+        for stem in (role, role + "_EN"):
+            gpt_dir, sovits_dir = root / f"GPT_weights_{version}", root / f"SoVITS_weights_{version}"
+            # Match names literally: role names can contain glob metacharacters.
+            gpts = [p for p in gpt_dir.glob("*.ckpt") if re.fullmatch(re.escape(stem) + r"-e\d+\.ckpt", p.name)]
+            sovits = [p for p in sovits_dir.glob("*.pth") if re.fullmatch(re.escape(stem) + r"_e\d+.*\.pth", p.name)]
+            if gpts or sovits:
+                if len(gpts) != 1 or len(sovits) != 1:
+                    raise ValueError(f"{role}: ambiguous or incomplete {version}/{stem} model pair: {len(gpts)} GPT, {len(sovits)} SoVITS")
+                candidates.append((version, gpts[0].resolve(), sovits[0].resolve()))
+    if len(candidates) != 1:
+        raise ValueError(f"{role}: expected one model pair across v4/v2Pro, found {len(candidates)}")
+    return candidates[0]
+
+
 def plan_import(source_root: Path, model_root: Path, *, voice_dir: Path = VOICE_DIR,
                 reference_dir: Path = PROJECT_ROOT / "references", role_ids: dict[str, str] | None = None,
-                reviews_path: Path | None = PROJECT_ROOT / "config" / "reference_reviews.json") -> list[dict]:
+                reviews_path: Path | None = PROJECT_ROOT / "config" / "reference_reviews.json",
+                roles: set[str] | None = None) -> list[dict]:
     source_root = source_root.resolve(strict=True)
     model_root = model_root.resolve(strict=True)
     if not source_root.is_dir() or not model_root.is_dir():
@@ -77,6 +97,8 @@ def plan_import(source_root: Path, model_root: Path, *, voice_dir: Path = VOICE_
     for role_dir in sorted(source_root.iterdir()):
         if not role_dir.is_dir():
             continue
+        if roles is not None and role_dir.name not in roles:
+            continue
         wavs = sorted((role_dir / "reference_audios").glob("*/emotions/*.wav"))
         if not wavs:
             result.append({"role": role_dir.name, "status": "skipped: no WAV"})
@@ -85,18 +107,18 @@ def plan_import(source_root: Path, model_root: Path, *, voice_dir: Path = VOICE_
         if role_id in used_ids:
             raise ValueError(f"Two roles map to {role_id}")
         used_ids.add(role_id)
-        gpt = _one_weight(model_root / "GPT_weights_v4", f"{role_dir.name}-e*.ckpt", role_dir.name)
-        sovits = _one_weight(model_root / "SoVITS_weights_v4", f"{role_dir.name}_e*.pth", role_dir.name)
+        version, gpt, sovits = _model_pair(model_root, role_dir.name)
+        model_id = f"{version}-local"
         target_profile = voice_dir / f"{role_id}.json"
         original = _existing_profile(source_root, target_profile)
         if original is None:
             profile = {"schema_version": 2, "name": role_dir.name, "target_language": "en",
-                       "default_model": "v4-local", "models": {}, "default_reference": "", "references": {}}
+                       "default_model": model_id, "models": {}, "default_reference": "", "references": {}}
         elif "models" not in original and "references" not in original:
             legacy = normalize_profile(original)
             old_reference_exists = Path(str(original["reference_audio"])).is_file()
             profile = {"schema_version": 2, "name": legacy["name"], "target_language": legacy["target_language"],
-                       "parameters": legacy["parameters"], "default_model": "v4-local",
+                       "parameters": legacy["parameters"], "default_model": model_id,
                        "models": {"loaded": {"name": "Previously loaded model", "engine": "gpt-sovits"}},
                        "default_reference": "default" if old_reference_exists else "", "references": {"default": {
                            "name": "Previous default", "audio": original["reference_audio"],
@@ -106,7 +128,7 @@ def plan_import(source_root: Path, model_root: Path, *, voice_dir: Path = VOICE_
             profile = dict(original)
             profile["models"] = dict(original["models"])
             profile["references"] = dict(original["references"])
-        profile["models"]["v4-local"] = {"name": "Local v4", "engine": "gpt-sovits", "version": "v4",
+        profile["models"][model_id] = {"name": f"Local {version}", "engine": "gpt-sovits", "version": version,
                                            "gpt_weights": str(gpt), "sovits_weights": str(sovits)}
         refs = []
         for audio in wavs:
@@ -172,13 +194,15 @@ def apply_import(plan: list[dict]) -> list[dict]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Import character folders with bracketed-emotion WAV filenames")
     parser.add_argument("source_voices", type=Path)
-    parser.add_argument("model_root", type=Path, help="GPT-SoVITS directory containing GPT_weights_v4 and SoVITS_weights_v4")
+    parser.add_argument("model_root", type=Path, help="GPT-SoVITS directory containing paired GPT_weights/SoVITS_weights v4 or v2Pro folders")
+    parser.add_argument("--role", action="append", help="Import only this character folder; repeat for several characters")
     parser.add_argument("--role-id", action="append", default=[], metavar="NAME=ID")
     parser.add_argument("--apply", action="store_true", help="Write files; without this, only show the plan")
     args = parser.parse_args()
     try:
         mapping = dict(part.split("=", 1) for part in args.role_id)
-        plan = plan_import(args.source_voices, args.model_root, role_ids=mapping)
+        plan = plan_import(args.source_voices, args.model_root, role_ids=mapping,
+                           roles=set(args.role) if args.role else None)
         output = apply_import(plan) if args.apply else [
             {k: v for k, v in item.items() if k in {"role", "id", "status", "count"}} for item in plan]
         print(json.dumps(output, ensure_ascii=False, indent=2))

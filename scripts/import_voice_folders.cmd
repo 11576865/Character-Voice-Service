@@ -13,7 +13,7 @@ if not exist "%VENV_PYTHON%" (
 set "SOURCE_VOICES=%~1"
 set "MODEL_ROOT=%~2"
 if "%SOURCE_VOICES%"=="" set /p "SOURCE_VOICES=Folder containing character folders: "
-if "%MODEL_ROOT%"=="" set /p "MODEL_ROOT=GPT-SoVITS root folder with GPT_weights_v4 and SoVITS_weights_v4: "
+if "%MODEL_ROOT%"=="" set /p "MODEL_ROOT=GPT-SoVITS root folder with paired v4 or v2Pro weights: "
 pushd "%PROJECT_ROOT%"
 echo Import preview:
 "%VENV_PYTHON%" -m server.folder_import "%SOURCE_VOICES%" "%MODEL_ROOT%"
