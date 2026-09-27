@@ -18,7 +18,7 @@ def setup_book(tmp_path, monkeypatch):
                 for c, chapter in enumerate(chapters) for p, text in enumerate(chapter["paragraphs"])]
     book = library.put_book({"title": "Production", "chapters": chapters}, segments, kind="manual")
     settings = {"voice": "a", "model_id": None, "reference_id": "a-neutral",
-                "speed": 1.0, "continuous_emotion": False}
+                "speed": 1.0, "continuous_emotion": False, "use_annotations": True}
     calls = []
     monkeypatch.setattr(api, "synthesize", lambda text, speed, selection:
                         calls.append((text, selection["selected_reference"]["id"])) or wav_bytes())

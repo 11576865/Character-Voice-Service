@@ -45,7 +45,7 @@ def test_private_book_generation_and_exports(tmp_path, monkeypatch):
     assert client.put(f"/v1/books/{book_id}/annotations", headers=headers,
                       json={"0:0": {"voice": "march-7th", "reference_id": "surprised"}}).status_code == 200
     started = client.post(f"/v1/books/{book_id}/generate", headers=headers,
-                          json={"voice": "march-7th"})
+                          json={"voice": "march-7th", "use_annotations": True})
     assert started.status_code == 200
     for _ in range(100):
         job = client.get(f"/v1/books/{book_id}/job", headers=headers).json()

@@ -28,7 +28,7 @@ def setup(tmp_path, monkeypatch):
 
 SETTINGS = {"voice": "march-7th", "model_id": "self-400", "reference_id": "neutral",
             "fixed_reference_id": "neutral", "speed": 1.0, "continuous_emotion": False,
-            "continuity_span": 1, "speaker_analysis": False}
+            "continuity_span": 1, "speaker_analysis": False, "use_annotations": False}
 
 
 def test_settings_persist_independently_and_invalid_changes_are_rejected(tmp_path, monkeypatch):

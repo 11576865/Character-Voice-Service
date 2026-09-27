@@ -86,6 +86,7 @@ class ReadingSettings(BaseModel):
     continuous_emotion: bool = False
     continuity_span: Literal[1, 2] = 1
     speaker_analysis: bool = False
+    use_annotations: bool = False
 
 
 class GenerationRequest(ReadingSettings):
@@ -381,7 +382,8 @@ def book_settings(book_id: str) -> dict | None:
     settings = book.get("readingSettings") or library.job(book_id).get("settings")
     if not settings:
         return None
-    return ReadingSettings.model_validate(settings).model_dump()
+    # Older saved jobs always applied annotations; preserve their audio identity.
+    return ReadingSettings.model_validate({"use_annotations": True, **settings}).model_dump()
 
 
 @app.put("/v1/books/{book_id}/reading-settings", dependencies=[Depends(require_admin)])
@@ -563,7 +565,7 @@ def _book_plan(book: dict, settings: dict,
         paragraph_index = segment["paragraphIndex"]
         paragraph = (chapter_index, paragraph_index)
         key = f"{chapter_index}:{paragraph_index}"
-        override = book.get("annotations", {}).get(key, {})
+        override = book.get("annotations", {}).get(key, {}) if settings.get("use_annotations", True) else {}
         voice = override.get("voice") or settings["voice"]
         model_id = override.get("model_id") or \
             (settings.get("model_id") if voice == settings["voice"] else None)

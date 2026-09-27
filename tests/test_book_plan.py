@@ -58,7 +58,8 @@ def test_preview_is_private_and_other_role_uses_its_own_default(tmp_path, monkey
     monkeypatch.setattr(app_module, "library", library)
     client = TestClient(app_module.app)
     route = f"/v1/books/{book['id']}/plan"
-    settings = {"voice": "a", "model_id": "a-only", "reference_id": "a-neutral", "speed": 1.0}
+    settings = {"voice": "a", "model_id": "a-only", "reference_id": "a-neutral", "speed": 1.0,
+                "use_annotations": True}
     assert client.post(route, json=settings).status_code == 401
     response = client.post(route, json=settings,
                            headers={"X-CVS-Token": app_module.ADMIN_TOKEN})
@@ -69,6 +70,23 @@ def test_preview_is_private_and_other_role_uses_its_own_default(tmp_path, monkey
     assert "selected_model" not in response.text
     assert client.post(route + "?chapter_index=99", json=settings,
                        headers={"X-CVS-Token": app_module.ADMIN_TOKEN}).status_code == 400
+
+
+def test_single_voice_mode_ignores_saved_roles_without_deleting_them(tmp_path, monkeypatch):
+    _profiles(monkeypatch)
+    library = BookLibrary(tmp_path)
+    book = _book(library)
+    monkeypatch.setattr(app_module, "library", library)
+    client = TestClient(app_module.app)
+    client.headers["X-CVS-Token"] = app_module.ADMIN_TOKEN
+    route = f"/v1/books/{book['id']}/plan"
+    settings = {"voice": "a", "reference_id": "a-neutral"}
+    assert {p["voice"] for p in client.post(route, json=settings).json()["paragraphs"]} == {"a"}
+    settings["use_annotations"] = True
+    assert client.post(route, json=settings).json()["paragraphs"][2]["voice"] == "b"
+    settings["use_annotations"] = False
+    assert {item["voice"] for item in app_module._book_plan(book, settings)} == {"a"}
+    assert library.get_book(book["id"])["annotations"]["0:2"]["voice"] == "b"
 
 
 def test_preview_includes_unlocked_speaker_suggestion(tmp_path, monkeypatch):

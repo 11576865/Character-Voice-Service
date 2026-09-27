@@ -5,7 +5,7 @@ import { AudioPlayer } from "./player.js";
 import { ReaderQueue } from "./queue.js";
 import { ProgressStore, documentIdForFile, progressSyncDecision } from "./progress.js?v=4";
 import { ReaderNavigation, chapterStart, chapterPosition } from "./navigation.js";
-import { VariantStore } from "./variants.js";
+import { VariantStore } from "./variants.js?v=2";
 import { OfflineLibrary } from "./offline.js?v=4";
 
 const element = id => document.getElementById(id);
@@ -222,6 +222,7 @@ function annotationKey(chapterIndex, paragraphIndex) {
 }
 
 function annotatedOptions(segment, options) {
+  if (!options.useAnnotations) return options;
   const marked = annotations[annotationKey(segment.chapterIndex, segment.paragraphIndex)];
   return marked ? { ...options, voice: marked.voice,
     modelId: marked.voice === options.voice ? options.modelId : null,
@@ -314,7 +315,8 @@ async function requestAudio(options) {
   options = annotatedOptions(options.segment, options);
   const pieces = paragraphSegments(options.segment);
   const offset = pieces.findIndex(item => item.index === options.segment.index);
-  const saved = await variantStore.selectedClip(paragraphKey(options.segment), offset, pieces.length);
+  const saved = await variantStore.selectedClip(paragraphKey(options.segment), offset, pieces.length,
+    explicitVersionParagraph === paragraphKey(options.segment) ? null : options);
   if (saved) return saved;
   const segmentId = bookSegmentIds[options.segment.index];
   if (currentBookId && segmentId) {
@@ -341,6 +343,7 @@ async function requestAudio(options) {
 }
 
 let queue;
+let explicitVersionParagraph = null;
 const player = new AudioPlayer(element("audio"), {
   onEnded: () => queue.handleEnded(),
   onError: error => queue.handlePlayerError(error),
@@ -361,6 +364,7 @@ function playbackOptions() {
     voice: ui.voice.value,
     modelId: ui.modelId.value || null,
     referenceId: ui.automaticReference.checked ? "auto" : ui.referenceId.value || null,
+    useAnnotations: element("useAnnotations").checked,
     speed
   };
 }
@@ -623,7 +627,8 @@ function render(snapshot = queue.snapshot) {
   ui.continuousEmotion.disabled = active || loading || !ui.automaticReference.checked;
   ui.continuitySpan.disabled = active || loading || !ui.continuousEmotion.checked;
   ui.saveReadingSettings.disabled = active || loading || !currentBookId || offlineMode;
-  ui.voiceModeStatus.textContent = `${ui.automaticReference.checked ? "自动情绪参考已开启" : "固定参考朗读"}${ui.continuousEmotion.checked ? " · 整书连续情绪规划已开启" : ""}${ui.speakerAnalysis.checked ? " · 章节说话人分析已开启" : ""}；已保存的段落修正优先生效。`;
+  element("useAnnotations").disabled = active || loading;
+  ui.voiceModeStatus.textContent = `${element("useAnnotations").checked ? "按段落标注切换角色" : "统一使用所选角色"} · ${ui.automaticReference.checked ? "自动情绪参考已开启" : "固定参考朗读"}${ui.continuousEmotion.checked ? " · 整书连续情绪规划已开启" : ""}${ui.speakerAnalysis.checked ? " · 说话人分析仅提供建议" : ""}。`;
   ui.speed.disabled = active || loading;
   ui.useManual.disabled = loading;
   ui.previousSegment.disabled = !hasDocument || loading || awaitingChoice || index <= 0;
@@ -730,6 +735,7 @@ function showDocument(model, metadata, id, label) {
 }
 
 function stopForSourceChange() {
+  explicitVersionParagraph = null;
   regenerationController?.abort();
   regenerationController = null;
   saveProgress(true);
@@ -906,7 +912,8 @@ async function regenerateParagraph() {
   regenerationController?.abort();
   regenerationController = new AbortController();
   const controller = regenerationController;
-  const options = playbackOptions();
+  const options = annotatedOptions(position.segment, playbackOptions());
+  explicitVersionParagraph = null;
   queue.stop();
   statusOverride = `正在重新生成当前段落（共 ${pieces.length} 个片段）……`;
   render();
@@ -938,6 +945,7 @@ async function selectParagraphVersion() {
   const position = activePosition();
   if (!position || !ui.paragraphVersions.value) return;
   await variantStore.select(paragraphKey(position.segment), ui.paragraphVersions.value);
+  explicitVersionParagraph = paragraphKey(position.segment);
   await jump(() => navigation.jumpToSegment(paragraphSegments(position.segment)[0].index, 0));
 }
 
@@ -1482,7 +1490,8 @@ async function previewBookPlan() {
         reference_id: options.referenceId, speed: options.speed,
         continuous_emotion: ui.continuousEmotion.checked,
         continuity_span: Number(ui.continuitySpan.value),
-        speaker_analysis: ui.speakerAnalysis.checked })
+        speaker_analysis: ui.speakerAnalysis.checked,
+        use_annotations: element("useAnnotations").checked })
     });
     const rows = (await response.json()).paragraphs.filter(item =>
       Number(item.paragraph.split(":")[0]) === chapter);
@@ -1724,7 +1733,8 @@ function currentReadingSettings() {
   return { voice: options.voice, model_id: options.modelId, reference_id: options.referenceId,
     fixed_reference_id: ui.referenceId.value || null,
     speed: options.speed, continuous_emotion: ui.continuousEmotion.checked,
-    continuity_span: Number(ui.continuitySpan.value), speaker_analysis: ui.speakerAnalysis.checked };
+    continuity_span: Number(ui.continuitySpan.value), speaker_analysis: ui.speakerAnalysis.checked,
+    use_annotations: element("useAnnotations").checked };
 }
 
 async function persistReadingSettings() {
@@ -1760,9 +1770,10 @@ function restoreReadingSettings(settings) {
   ui.continuousEmotion.checked = ui.automaticReference.checked && Boolean(settings?.continuous_emotion);
   ui.continuitySpan.value = String(settings?.continuity_span || 1);
   ui.speakerAnalysis.checked = Boolean(settings?.speaker_analysis);
+  element("useAnnotations").checked = Boolean(settings?.use_annotations);
   ui.readingSettingsStatus.textContent = missing.length
     ? `保存的${missing.join("、")}不可用，请重新选择后保存。`
-    : settings ? "已恢复本书声音设置；段落人工修正仍优先。"
+    : settings ? "已恢复本书声音设置；段落标注是否生效由上方开关决定。"
     : "本书尚无保存的声音设置，已使用默认固定声音。请选择并保存。";
   render();
 }
@@ -1775,9 +1786,10 @@ ui.saveReadingSettings.addEventListener("click", async () => {
     await refreshProductionStatus();
   } catch (error) { ui.readingSettingsStatus.textContent = `保存失败：${error.message}`; }
 });
-for (const control of [ui.voice, ui.modelId, ui.referenceId, ui.speed, ui.automaticReference,
+for (const control of [element("useAnnotations"), ui.voice, ui.modelId, ui.referenceId, ui.speed, ui.automaticReference,
   ui.continuousEmotion, ui.continuitySpan, ui.speakerAnalysis]) {
   control.addEventListener("change", () => {
+    explicitVersionParagraph = null;
     if (currentBookId) ui.readingSettingsStatus.textContent = "声音设置已改动，尚未保存到本书；保存或启动生成后生效。";
   });
 }
@@ -1789,6 +1801,11 @@ ui.voice.addEventListener("change", () => {
 });
 ui.automaticReference.addEventListener("change", () => {
   if (!ui.automaticReference.checked) ui.continuousEmotion.checked = false;
+  clearPlanPreview();
+  render();
+});
+element("useAnnotations").addEventListener("change", () => {
+  stopForSourceChange();
   clearPlanPreview();
   render();
 });
@@ -1901,7 +1918,8 @@ render();
 try {
   ui.fontSize.value = localStorage.getItem("cvs.reader.fontSize") || "18";
   ui.readingPane.style.fontSize = `${ui.fontSize.value}px`;
-  ui.theme.value = localStorage.getItem("cvs.reader.theme") === "sepia" ? "sepia" : "dark";
+  ui.theme.value = ["auto", "sepia", "dark"].includes(localStorage.getItem("cvs.reader.theme"))
+    ? localStorage.getItem("cvs.reader.theme") : "dark";
   document.body.dataset.theme = ui.theme.value;
 } catch (_) { /* reader preferences stay in memory */ }
 loadVoices();

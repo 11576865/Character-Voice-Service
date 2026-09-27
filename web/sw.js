@@ -1,10 +1,10 @@
-const CACHE = "cvs-reader-shell-v17";
-const SHELL = ["/", "/reader-assets/reader.css?v=8", "/reader-assets/favicon.svg?v=3",
-  "/reader-assets/js/reader.js?v=17", "/reader-assets/js/sources.js",
+const CACHE = "cvs-reader-shell-v18";
+const SHELL = ["/", "/reader-assets/reader.css?v=9", "/reader-assets/favicon.svg?v=4",
+  "/reader-assets/js/reader.js?v=18", "/reader-assets/js/sources.js",
   "/reader-assets/js/epub_source.js", "/reader-assets/js/segmenter.js",
   "/reader-assets/js/player.js", "/reader-assets/js/queue.js",
   "/reader-assets/js/progress.js?v=4", "/reader-assets/js/navigation.js",
-  "/reader-assets/js/variants.js", "/reader-assets/js/offline.js?v=4"];
+  "/reader-assets/js/variants.js?v=2", "/reader-assets/js/offline.js?v=4"];
 
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)));

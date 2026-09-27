@@ -81,9 +81,11 @@ export class VariantStore {
     return this.write(key, state);
   }
 
-  async selectedClip(key, offset, count) {
+  async selectedClip(key, offset, count, expected = null) {
     const state = await this.read(key);
     const version = state.versions.find(item => item.id === state.selected);
+    if (expected && (!version?.metadata || ["voice", "modelId", "referenceId", "speed"]
+      .some(field => version.metadata[field] !== expected[field]))) return null;
     return version?.clips.length === count ? version.clips[offset] || null : null;
   }
 }

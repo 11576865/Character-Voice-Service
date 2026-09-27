@@ -87,12 +87,21 @@ def test_reader_modules_are_served():
     assert 'id="offlineStorage"' in page.text
     assert 'id="storageBookPath"' in page.text
     assert 'id="showStoragePaths"' in page.text
-    assert "/reader-assets/reader.css?v=8" in page.text
-    assert "/reader-assets/js/reader.js?v=17" in page.text
+    assert "/reader-assets/reader.css?v=9" in page.text
+    assert "/reader-assets/js/reader.js?v=18" in page.text
     assert module.status_code == 200
     assert "javascript" in module.headers["content-type"]
     assert stylesheet.status_code == 200
     assert "text/css" in stylesheet.headers["content-type"]
+    assert 'class="app-shell"' in page.text
+    assert 'class="reader-layout"' in page.text
+    assert client.get("/reader-assets/favicon.svg").status_code == 200
+    # UI-only branches must not drop controls needed by the production reader.
+    import re
+    ids = re.findall(r'\bid="([^"]+)"', page.text)
+    assert len(ids) == len(set(ids))
+    required = set(re.findall(r'element\("([^"]+)"\)', module.text))
+    assert required <= set(ids), required - set(ids)
 
 
 def test_voice_list_reads_legacy_profile_without_exposing_paths(tmp_path, monkeypatch):
