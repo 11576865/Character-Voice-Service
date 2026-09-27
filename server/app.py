@@ -82,6 +82,8 @@ class GenerationRequest(BaseModel):
     reference_id: str | None = None
     speed: float = 1.0
     continuous_emotion: bool = False
+    paragraphs: list[str] | None = None
+    retry_failed: bool = False
 
 
 class SelectionRequest(BaseModel):
@@ -382,7 +384,10 @@ async def save_book_source(book_id: str, request: Request, kind: str):
 def save_book_annotations(book_id: str, annotations: dict):
     get_book_or_404(book_id)
     try:
-        library.save_annotations(book_id, annotations)
+        with jobs_lock:
+            if book_id in active_jobs:
+                raise HTTPException(status_code=409, detail="请先取消或等待生成任务完成，再修改段落。")
+            library.save_annotations(book_id, annotations)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"saved": len(annotations)}
@@ -397,7 +402,10 @@ def book_speaker_suggestions(book_id: str):
 def save_book_pronunciations(book_id: str, rules: dict):
     get_book_or_404(book_id)
     try:
-        library.save_pronunciations(book_id, rules)
+        with jobs_lock:
+            if book_id in active_jobs:
+                raise HTTPException(status_code=409, detail="请先取消或等待生成任务完成，再修改发音。")
+            library.save_pronunciations(book_id, rules)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"saved": len(rules)}
@@ -427,6 +435,7 @@ def get_versions(book_id: str):
 @app.get("/v1/books/{book_id}/audio/{segment_id}", dependencies=[Depends(require_admin)])
 def get_selected_audio(book_id: str, segment_id: str):
     get_book_or_404(book_id)
+    require_current_audio(book_id, segment_id)
     path = library.audio_path(book_id, segment_id)
     if not path:
         raise HTTPException(status_code=404, detail="Audio not generated")
@@ -436,6 +445,7 @@ def get_selected_audio(book_id: str, segment_id: str):
 @app.get("/v1/books/{book_id}/offline-manifest", dependencies=[Depends(require_admin)])
 def offline_manifest(book_id: str):
     get_book_or_404(book_id)
+    require_current_audio(book_id)
     try:
         manifest = library.offline_manifest(book_id)
         manifest["voices"] = voices()["voices"]
@@ -449,6 +459,7 @@ def offline_manifest(book_id: str):
 @app.get("/v1/books/{book_id}/offline-audio/{segment_id}", dependencies=[Depends(require_admin)])
 def offline_audio(book_id: str, segment_id: str):
     get_book_or_404(book_id)
+    require_current_audio(book_id, segment_id)
     if not any(item["id"] == segment_id for item in get_book_or_404(book_id)["segments"]):
         raise HTTPException(status_code=404, detail="Segment not found")
     try:
@@ -463,6 +474,7 @@ def offline_audio(book_id: str, segment_id: str):
 @app.get("/v1/books/{book_id}/read-aloud.epub", dependencies=[Depends(require_admin)])
 def read_aloud_epub(book_id: str):
     get_book_or_404(book_id)
+    require_current_audio(book_id)
     try:
         path = export_read_aloud(library, book_id)
     except ValueError as exc:
@@ -485,6 +497,7 @@ async def parse_uploaded_document(request: Request, kind: str, name: str):
 @app.get("/v1/books/{book_id}/complete.wav", dependencies=[Depends(require_admin)])
 def complete_wav(book_id: str):
     get_book_or_404(book_id)
+    require_current_audio(book_id)
     try:
         path = library.combined_wav(book_id)
     except (ValueError, OSError, wave.Error) as exc:
@@ -505,11 +518,12 @@ def select_book_version(book_id: str, segment_id: str, request: SelectionRequest
 def _book_plan(book: dict, settings: dict,
                chapter_index: int | None = None) -> Iterator[dict]:
     """Resolve the same paragraph voices and references used by generation."""
+    chapter_filter = chapter_index
     continuity = {"chapter": None, "voice": None, "paragraph": None,
                   "reference": None, "reason": None, "held": False}
     profiles = {}
     for segment in book["segments"]:
-        if chapter_index is not None and segment["chapterIndex"] != chapter_index:
+        if chapter_filter is not None and segment["chapterIndex"] != chapter_filter:
             continue
         chapter_index = segment["chapterIndex"]
         paragraph_index = segment["paragraphIndex"]
@@ -557,6 +571,43 @@ def _book_plan(book: dict, settings: dict,
                "spoken_text": text_to_speak, "selection": selection}
 
 
+def _audio_fingerprint(item: dict, settings: dict) -> str:
+    return hashlib.sha256(json.dumps({
+        "text": item["spoken_text"], "voice": item["voice"],
+        "model": item["selection"]["selected_model"],
+        "reference": item["selection"]["selected_reference"],
+        "speed": settings["speed"],
+    }, sort_keys=True).encode()).hexdigest()
+
+
+def _audio_state(book_id: str, item: dict, settings: dict, versions: dict) -> str:
+    stored = versions.get(item["segment"]["id"], {})
+    chosen = next((v for v in stored.get("versions", [])
+                   if v["id"] == stored.get("selected")), None)
+    if not chosen or not library.audio_path(book_id, item["segment"]["id"], versions):
+        return "missing"
+    return "ready" if chosen.get("metadata", {}).get("fingerprint") == \
+        _audio_fingerprint(item, settings) else "stale"
+
+
+def require_current_audio(book_id: str, segment_id: str | None = None):
+    """Keep downloads and playback aligned with the last submitted production settings."""
+    with jobs_lock:
+        if book_id in active_jobs and segment_id is None:
+            raise HTTPException(status_code=409, detail="生成任务仍在运行，请完成或取消后再导出。")
+    settings = library.job(book_id).get("settings")
+    if not settings:
+        return
+    versions = library.versions(book_id)
+    for item in _book_plan(library.get_book(book_id), settings):
+        if segment_id is not None and item["segment"]["id"] != segment_id:
+            continue
+        state = _audio_state(book_id, item, settings, versions)
+        if state != "ready":
+            raise HTTPException(status_code=409, detail=
+                                "存在未生成或配置已改变的音频，请先补齐缺失／已修改段落。")
+
+
 @app.post("/v1/books/{book_id}/plan", dependencies=[Depends(require_admin)])
 def preview_book_plan(book_id: str, request: GenerationRequest,
                       chapter_index: int | None = None):
@@ -566,22 +617,46 @@ def preview_book_plan(book_id: str, request: GenerationRequest,
     if chapter_index is not None and not 0 <= chapter_index < len(book["document"]["chapters"]):
         raise HTTPException(status_code=400, detail="Invalid chapter index")
     plan = _book_plan(book, request.model_dump(), chapter_index)
-    paragraphs = []
-    seen = set()
+    paragraphs = {}
+    versions = library.versions(book_id)
+    settings = request.model_dump()
     for item in plan:
-        if item["paragraph"] in seen:
-            continue
-        seen.add(item["paragraph"])
-        paragraphs.append({key: item[key] for key in
-                           ("paragraph", "text", "voice", "reference_id", "model_id", "reason")})
-    return {"paragraphs": paragraphs}
+        row = paragraphs.setdefault(item["paragraph"], {
+            **{key: item[key] for key in
+               ("paragraph", "text", "voice", "reference_id", "model_id", "reason")},
+            "audio": {"ready": 0, "stale": 0, "missing": 0}})
+        row["audio"][_audio_state(book_id, item, settings, versions)] += 1
+    return {"paragraphs": list(paragraphs.values())}
+
+
+@app.get("/v1/books/{book_id}/audio-status", dependencies=[Depends(require_admin)])
+def book_audio_status(book_id: str):
+    book = get_book_or_404(book_id)
+    settings = library.job(book_id).get("settings")
+    counts = {"ready": 0, "stale": 0, "missing": 0}
+    chapters = {}
+    if not settings:
+        return {**counts, "missing": len(book["segments"]), "total": len(book["segments"]),
+                "planned": False, "chapters": []}
+    versions = library.versions(book_id)
+    for item in _book_plan(book, settings):
+        state = _audio_state(book_id, item, settings, versions)
+        counts[state] += 1
+        index = item["segment"]["chapterIndex"]
+        chapter = chapters.setdefault(index, {"chapterIndex": index, "ready": 0,
+                                              "stale": 0, "missing": 0})
+        chapter[state] += 1
+    return {**counts, "total": len(book["segments"]), "planned": True,
+            "chapters": list(chapters.values())}
 
 
 def _generate_book(book_id: str, settings: dict, cancel: threading.Event):
     book = library.get_book(book_id)
-    total = len(book["segments"])
+    targets = settings.get("target_segments")
+    total = len(targets) if targets is not None else len(book["segments"])
     job = {"status": "running", "completed": 0, "total": total,
-           "error": None, "settings": settings, "updatedAt": _now_iso()}
+           "error": None, "errors": [], "generated": 0, "reused": 0,
+           "settings": settings, "updatedAt": _now_iso()}
     library.set_job(book_id, job)
     try:
         for item in _book_plan(book, settings):
@@ -589,33 +664,40 @@ def _generate_book(book_id: str, settings: dict, cancel: threading.Event):
                 job["status"] = "cancelled"
                 break
             segment = item["segment"]
+            if targets is not None and segment["id"] not in targets:
+                continue
             voice = item["voice"]
             text_to_speak = item["spoken_text"]
             selection = item["selection"]
             actual_reference = item["reference_id"]
-            fingerprint = hashlib.sha256(json.dumps({
-                "text": text_to_speak, "voice": voice,
-                "model": selection["selected_model"],
-                "reference": selection["selected_reference"],
-                "speed": settings["speed"],
-            }, sort_keys=True).encode()).hexdigest()
+            fingerprint = _audio_fingerprint(item, settings)
             existing = library.versions(book_id).get(segment["id"], {})
             chosen = next((version for version in existing.get("versions", [])
                            if version["id"] == existing.get("selected")), None)
             if not chosen or chosen.get("metadata", {}).get("fingerprint") != fingerprint or \
                     not library.audio_path(book_id, segment["id"]):
-                audio = synthesize(text_to_speak, settings["speed"], selection)
-                library.add_version(book_id, segment["id"], audio, {
-                    "voice": voice, "model_id": selection["selected_model"]["id"],
-                    "reference_id": actual_reference, "speed": settings["speed"],
-                    "fingerprint": fingerprint,
-                    "pronunciationsUpdatedAt": book.get("pronunciationsUpdatedAt"),
-                })
+                try:
+                    audio = synthesize(text_to_speak, settings["speed"], selection)
+                    library.add_version(book_id, segment["id"], audio, {
+                        "voice": voice, "model_id": selection["selected_model"]["id"],
+                        "reference_id": actual_reference, "speed": settings["speed"],
+                        "fingerprint": fingerprint,
+                        "pronunciationsUpdatedAt": book.get("pronunciationsUpdatedAt"),
+                    })
+                    job["generated"] += 1
+                except Exception as exc:
+                    job["errors"].append({"segmentId": segment["id"],
+                                          "paragraph": item["paragraph"], "error": str(exc)})
+                    job["updatedAt"] = _now_iso()
+                    library.set_job(book_id, job)
+                    continue
+            else:
+                job["reused"] += 1
             job["completed"] += 1
             job["updatedAt"] = _now_iso()
             library.set_job(book_id, job)
         if job["status"] == "running":
-            job["status"] = "completed"
+            job["status"] = "completed_with_errors" if job["errors"] else "completed"
     except Exception as exc:
         job["status"] = "failed"
         job["error"] = str(exc)
@@ -634,18 +716,30 @@ def _now_iso():
 
 @app.post("/v1/books/{book_id}/generate", dependencies=[Depends(require_admin)])
 def generate_book(book_id: str, request: GenerationRequest):
-    get_book_or_404(book_id)
+    book = get_book_or_404(book_id)
     if request.speed <= 0:
         raise HTTPException(status_code=400, detail="Speed must be positive")
     load_voice_profile(request.voice)
     with jobs_lock:
         if book_id in active_jobs:
             raise HTTPException(status_code=409, detail="Book generation already running")
+        settings = request.model_dump()
+        if request.paragraphs is not None and request.retry_failed:
+            raise HTTPException(status_code=400, detail="不能同时指定段落和失败重试。")
+        if request.paragraphs is not None:
+            valid = {f"{s['chapterIndex']}:{s['paragraphIndex']}" for s in book["segments"]}
+            if not request.paragraphs or not set(request.paragraphs) <= valid:
+                raise HTTPException(status_code=400, detail="请选择有效的书籍段落。")
+            settings["target_segments"] = [s["id"] for s in book["segments"]
+                                          if f"{s['chapterIndex']}:{s['paragraphIndex']}" in request.paragraphs]
+        elif request.retry_failed:
+            settings["target_segments"] = [e["segmentId"] for e in library.job(book_id).get("errors", [])]
+            if not settings["target_segments"]:
+                raise HTTPException(status_code=400, detail="当前没有记录到失败片段，请使用补齐功能。")
         cancel = threading.Event()
         active_jobs[book_id] = cancel
-    settings = request.model_dump()
     library.set_job(book_id, {"status": "queued", "completed": 0,
-                              "total": len(get_book_or_404(book_id)["segments"]),
+                              "total": len(settings.get("target_segments", book["segments"])),
                               "settings": settings, "updatedAt": _now_iso(), "error": None})
     generation_pool.submit(_generate_book, book_id, settings, cancel)
     return {"status": "queued", "book_id": book_id}

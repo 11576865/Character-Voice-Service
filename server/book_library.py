@@ -184,8 +184,8 @@ class BookLibrary:
             item["selected"] = version_id
             _atomic_json(self._versions_path(book_id), state)
 
-    def audio_path(self, book_id: str, segment_id: str) -> Path | None:
-        item = self.versions(book_id).get(segment_id)
+    def audio_path(self, book_id: str, segment_id: str, versions: dict | None = None) -> Path | None:
+        item = (self.versions(book_id) if versions is None else versions).get(segment_id)
         if not item or not item.get("selected"):
             return None
         path = self._folder(book_id) / "audio" / segment_id / f"{item['selected']}.wav"

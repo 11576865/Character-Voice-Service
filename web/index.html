@@ -53,7 +53,8 @@
       <button id="loginLibrary" class="button-primary">登录书库</button></div>
     <div class="library-actions">
       <button id="loadLibrary">刷新书库</button><button id="saveBook">保存当前书籍</button>
-      <button id="generateBook" class="button-primary">整本书一键生成</button>
+      <button id="generateBook" class="button-primary">生成全书／补齐缺失与已修改段落</button>
+      <button id="retryFailed">只重试失败片段</button>
       <button id="cancelGeneration" class="button-danger">取消生成</button>
       <button id="downloadBook">下载整本书到本设备</button>
       <button id="exportEpub">导出同步 EPUB</button><button id="exportWav">导出整篇 WAV</button>
@@ -67,10 +68,20 @@
       <div class="plan-toolbar"><label for="planChapter">章节</label><select id="planChapter"></select>
         <button id="previewPlan" type="button">计算本章安排</button>
         <button id="savePlanCorrections" type="button" disabled>保存本章修正</button></div>
+      <div class="plan-toolbar">
+        <label class="check-row"><input id="selectPlanAll" type="checkbox">选中本章全部段落</label>
+        <label>批量角色<select id="batchPlanVoice"></select></label>
+        <label>批量参考<select id="batchPlanReference"></select></label>
+        <button id="applyPlanBatch" type="button">应用到选中段落</button>
+        <button id="generateSelectedPlan" type="button">补齐选中段落音频</button>
+      </div>
+      <p class="muted">先保存声音修正，再生成。配置一致的音频直接复用；修改过的音频会标为待更新，补齐后才能导出或重新下载离线书。</p>
       <div id="planStatus" role="status" aria-live="polite"></div>
       <div id="planRows" class="plan-rows"></div>
     </details>
     <div id="jobStatus" role="status"></div>
+    <div id="productionStatus" role="status" aria-live="polite"></div>
+    <p class="muted">本次任务完成不一定代表全书完成。下载到本设备：供本浏览器离线听读；同步 EPUB：文字与音频打包，需兼容的有声 EPUB 阅读器；WAV：整篇连续音频，可用普通播放器收听。修改后需重新下载离线副本或导出文件。</p>
     <div class="library-columns"><div><h3>电脑书库</h3><nav id="libraryBooks" aria-label="本机书库"></nav></div>
       <div><h3>本设备离线书籍</h3><div id="offlineStorage" class="muted" role="status"></div><nav id="offlineBooks" aria-label="离线书库"></nav></div></div>
   </details>
@@ -179,6 +190,6 @@
   </div>
 
   <audio id="audio" hidden></audio>
-  <script type="module" src="/reader-assets/js/reader.js?v=11"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=12"></script>
 </body>
 </html>

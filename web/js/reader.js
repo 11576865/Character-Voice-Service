@@ -52,7 +52,10 @@ const ui = {
   storagePathStatus: element("storagePathStatus"), planPanel: element("planPanel"),
   planChapter: element("planChapter"), previewPlan: element("previewPlan"),
   savePlanCorrections: element("savePlanCorrections"), planStatus: element("planStatus"),
-  planRows: element("planRows")
+  planRows: element("planRows"), retryFailed: element("retryFailed"),
+  selectPlanAll: element("selectPlanAll"), batchPlanVoice: element("batchPlanVoice"),
+  batchPlanReference: element("batchPlanReference"), applyPlanBatch: element("applyPlanBatch"),
+  generateSelectedPlan: element("generateSelectedPlan"), productionStatus: element("productionStatus")
 };
 
 const progressStore = new ProgressStore();
@@ -312,14 +315,14 @@ async function requestAudio(options) {
   const segmentId = bookSegmentIds[options.segment.index];
   if (currentBookId && segmentId) {
     const offline = await offlineLibrary.getClip(currentBookId, segmentId).catch(() => null);
-    if (offline && (offlineMode || (offlineAudioVersion === pronunciationsUpdatedAt &&
-        offlineAnnotationsSignature === JSON.stringify(annotations)))) return offline;
+    if (offline && offlineMode) return offline;
   }
   if (offlineMode) throw new Error("此段音频未下载，离线时无法重新生成。 ");
   const selectedVersion = bookVersions[segmentId];
   const metadata = selectedVersion?.metadata;
   const expectedReference = options.referenceId || voiceCatalog.get(options.voice)?.default_reference;
   const versionMatches = metadata?.pronunciationsUpdatedAt === pronunciationsUpdatedAt &&
+    Number(metadata?.speed) === Number(options.speed) &&
     metadata?.voice === options.voice &&
     (!options.modelId || metadata.model_id === options.modelId) &&
     (expectedReference === "auto" || !expectedReference || metadata.reference_id === expectedReference);
@@ -328,7 +331,7 @@ async function requestAudio(options) {
       credentials: "same-origin", signal: options.signal
     });
     if (response.ok) return response.blob();
-    if (response.status !== 404) throw new Error(`书库音频请求失败：HTTP ${response.status}`);
+    if (![404, 409].includes(response.status)) throw new Error(`书库音频请求失败：HTTP ${response.status}`);
   }
   return fetchFreshAudio(options);
 }
@@ -555,6 +558,7 @@ function selectParagraph(chapterIndex, paragraphIndex, node) {
 
 async function applyParagraphVoice() {
   if (!selectedParagraph) return;
+  const previousAnnotations = { ...annotations };
   const key = annotationKey(selectedParagraph.chapterIndex, selectedParagraph.paragraphIndex);
   if (ui.paragraphVoice.value) {
     annotations[key] = { voice: ui.paragraphVoice.value,
@@ -571,8 +575,13 @@ async function applyParagraphVoice() {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(annotations)
       });
-      statusOverride = "段落角色标注已保存。";
-    } catch (error) { statusOverride = `标注保存失败：${error.message}`; }
+      stopForSourceChange();
+      statusOverride = "段落角色标注已保存；旧音频会重新核对，生成前可预览待更新段落。";
+    } catch (error) {
+      annotations = previousAnnotations;
+      renderBody();
+      statusOverride = `标注保存失败：${error.message}`;
+    }
   } else {
     if (offlineMode && currentBookId) {
       await offlineLibrary.updateBook(currentBookId, {
@@ -1317,15 +1326,38 @@ async function pollJob() {
   if (!currentBookId) return;
   try {
     const job = await (await libraryFetch(`/v1/books/${currentBookId}/job`)).json();
-    ui.jobStatus.textContent = `生成：${job.status} · ${job.completed}/${job.total}${job.error ? ` · ${job.error}` : ""}`;
+    const names = { queued: "排队中", running: "生成中", completed: "本次任务完成",
+      completed_with_errors: "部分片段失败", failed: "任务失败", cancelled: "已取消", interrupted: "已中断", none: "尚未生成" };
+    ui.jobStatus.textContent = `${names[job.status] || job.status} · ${job.completed}/${job.total} · 新生成 ${job.generated || 0} · 复用 ${job.reused || 0} · 失败 ${job.errors?.length || 0}${job.error ? ` · ${job.error}` : ""}`;
+    for (const failure of job.errors || []) {
+      const detail = document.createElement("div");
+      const [chapter, paragraph] = failure.paragraph.split(":").map(Number);
+      detail.textContent = `第 ${chapter + 1} 章第 ${paragraph + 1} 段：${failure.error}`;
+      ui.jobStatus.append(detail);
+    }
     if (["queued", "running"].includes(job.status)) {
       clearTimeout(jobPoll);
       jobPoll = setTimeout(pollJob, 2500);
-    } else if (job.status === "completed") {
+    } else {
       await refreshBookVersions();
+      await refreshProductionStatus();
+      if (ui.planRows.children.length && !ui.planRows.querySelector(".pending")) await previewBookPlan();
     }
   } catch (error) {
     ui.jobStatus.textContent = `任务查询失败：${error.message}`;
+  }
+}
+
+async function refreshProductionStatus() {
+  if (!currentBookId || offlineMode) return;
+  const result = await (await libraryFetch(`/v1/books/${currentBookId}/audio-status`)).json();
+  ui.productionStatus.textContent = result.planned
+    ? `全书音频（按最近提交的生成设置）：可用 ${result.ready}/${result.total} · 待更新 ${result.stale} · 未生成 ${result.missing}。${result.ready === result.total ? "音频已齐全，任务停止后可下载或导出。" : "请补齐后再下载或导出全书。"}`
+    : "本书尚未提交生成设置。先预览声音安排，再生成全书或选中段落。";
+  for (const chapter of result.chapters) {
+    const line = document.createElement("div");
+    line.textContent = `第 ${chapter.chapterIndex + 1} 章：可用 ${chapter.ready} · 待更新 ${chapter.stale} · 未生成 ${chapter.missing}`;
+    ui.productionStatus.append(line);
   }
 }
 
@@ -1341,6 +1373,7 @@ async function refreshBookVersions() {
 function clearPlanPreview() {
   ui.planRows.replaceChildren();
   ui.savePlanCorrections.disabled = true;
+  ui.selectPlanAll.checked = false;
   ui.planStatus.textContent = "设置或标注已改变，请重新计算本章安排。";
 }
 
@@ -1388,19 +1421,29 @@ async function previewBookPlan() {
     const rows = (await response.json()).paragraphs.filter(item =>
       Number(item.paragraph.split(":")[0]) === chapter);
     ui.planRows.replaceChildren();
+    ui.selectPlanAll.checked = false;
+    ui.batchPlanVoice.replaceChildren(new Option("旁白", ""));
+    for (const voice of voiceCatalog.values()) ui.batchPlanVoice.add(new Option(voice.name || voice.id, voice.id));
+    fillPlanReferences(ui.batchPlanReference, options.voice);
     ui.savePlanCorrections.disabled = true;
     for (const item of rows) {
       const row = document.createElement("article");
       row.className = "plan-row";
       row.dataset.paragraph = item.paragraph;
+      const selected = document.createElement("input");
+      selected.type = "checkbox";
+      selected.className = "plan-selected";
+      selected.setAttribute("aria-label", `选中第 ${Number(item.paragraph.split(":")[1]) + 1} 段`);
       const heading = document.createElement("strong");
       heading.textContent = `第 ${Number(item.paragraph.split(":")[1]) + 1} 段`;
       const text = document.createElement("p");
-      text.textContent = item.text.length > 180 ? `${item.text.slice(0, 180)}…` : item.text;
+      text.textContent = item.text;
       const actual = document.createElement("p");
       const role = voiceCatalog.get(item.voice);
       const reference = role?.references.find(ref => ref.id === item.reference_id);
       actual.textContent = `拟用：${role?.name || item.voice} · ${reference?.name || item.reference_id} · ${planReason(item.reason)}`;
+      const audioState = document.createElement("p");
+      audioState.textContent = `音频片段：可复用 ${item.audio?.ready || 0} · 待更新 ${item.audio?.stale || 0} · 未生成 ${item.audio?.missing || 0}；情绪：${reference?.emotion || "未标注"}`;
       const choices = document.createElement("div");
       choices.className = "plan-choice";
       const voiceLabel = document.createElement("label");
@@ -1435,7 +1478,7 @@ async function previewBookPlan() {
       });
       referenceSelect.addEventListener("change", markDirty);
       choices.append(voiceLabel, referenceLabel);
-      row.append(heading, text, actual, choices);
+      row.append(selected, heading, text, actual, audioState, choices);
       ui.planRows.appendChild(row);
     }
     ui.planStatus.textContent = `${rows.length} 段已预览；绿色边框表示待保存的修正。`;
@@ -1448,6 +1491,8 @@ async function savePlanCorrections() {
   if (!currentBookId || offlineMode) return;
   const changed = [...ui.planRows.querySelectorAll(".plan-row.pending")];
   if (!changed.length) return;
+  const selectedKeys = new Set([...ui.planRows.querySelectorAll(".plan-row")]
+    .filter(row => row.querySelector(".plan-selected").checked).map(row => row.dataset.paragraph));
   const next = { ...annotations };
   const narrator = playbackOptions().voice;
   for (const row of changed) {
@@ -1470,13 +1515,21 @@ async function savePlanCorrections() {
     }
     renderBody();
     await previewBookPlan();
+    for (const row of ui.planRows.querySelectorAll(".plan-row")) {
+      row.querySelector(".plan-selected").checked = selectedKeys.has(row.dataset.paragraph);
+    }
+    await refreshProductionStatus();
     ui.planStatus.textContent = `${changed.length} 段修正已保存；上方显示更新后的安排。`;
   } catch (error) {
     ui.planStatus.textContent = `保存失败：${error.message}`;
   }
 }
 
-async function generateWholeBook() {
+async function generateWholeBook(scope = {}) {
+  if (ui.planRows.querySelector(".pending")) {
+    ui.jobStatus.textContent = "请先保存本章声音修正，再生成音频。";
+    return;
+  }
   if (!currentBookId) {
     ui.jobStatus.textContent = "请先把当前书籍保存到书库。";
     return;
@@ -1487,7 +1540,7 @@ async function generateWholeBook() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ voice: options.voice, model_id: options.modelId,
         reference_id: options.referenceId, speed: options.speed,
-        continuous_emotion: ui.continuousEmotion.checked })
+        continuous_emotion: ui.continuousEmotion.checked, ...scope })
     });
     await pollJob();
   } catch (error) {
@@ -1583,7 +1636,32 @@ ui.loginLibrary.addEventListener("click", loginLibrary);
 ui.showStoragePaths.addEventListener("click", loadStoragePaths);
 ui.loadLibrary.addEventListener("click", loadLibrary);
 ui.saveBook.addEventListener("click", saveCurrentBook);
-ui.generateBook.addEventListener("click", generateWholeBook);
+ui.generateBook.addEventListener("click", () => generateWholeBook());
+ui.retryFailed.addEventListener("click", () => generateWholeBook({ retry_failed: true }));
+ui.selectPlanAll.addEventListener("change", () => {
+  for (const input of ui.planRows.querySelectorAll(".plan-selected")) input.checked = ui.selectPlanAll.checked;
+});
+ui.batchPlanVoice.addEventListener("change", () =>
+  fillPlanReferences(ui.batchPlanReference, ui.batchPlanVoice.value || playbackOptions().voice));
+ui.applyPlanBatch.addEventListener("click", () => {
+  let count = 0;
+  for (const row of ui.planRows.querySelectorAll(".plan-row")) {
+    if (!row.querySelector(".plan-selected").checked) continue;
+    row.querySelector(".plan-voice").value = ui.batchPlanVoice.value;
+    fillPlanReferences(row.querySelector(".plan-reference"),
+      ui.batchPlanVoice.value || playbackOptions().voice, ui.batchPlanReference.value);
+    row.classList.add("pending");
+    count++;
+  }
+  ui.savePlanCorrections.disabled = !ui.planRows.querySelector(".pending");
+  ui.planStatus.textContent = count ? `${count} 段已批量修改，请保存修正。` : "请先勾选段落。";
+});
+ui.generateSelectedPlan.addEventListener("click", () => {
+  const paragraphs = [...ui.planRows.querySelectorAll(".plan-row")]
+    .filter(row => row.querySelector(".plan-selected").checked).map(row => row.dataset.paragraph);
+  if (!paragraphs.length) { ui.planStatus.textContent = "请先勾选要生成的段落。"; return; }
+  generateWholeBook({ paragraphs });
+});
 ui.suggestSpeakers.addEventListener("click", loadSpeakerSuggestions);
 ui.downloadBook.addEventListener("click", downloadWholeBook);
 ui.exportEpub.addEventListener("click", exportEpub);
