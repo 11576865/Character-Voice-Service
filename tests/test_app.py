@@ -79,10 +79,14 @@ def test_root_lists_public_endpoints():
 def test_reader_modules_are_served():
     page = client.get("/test")
     module = client.get("/reader-assets/js/reader.js")
+    favicon = client.get("/reader-assets/favicon.svg")
     assert page.status_code == 200
     assert "/reader-assets/js/reader.js" in page.text
     assert 'id="modelId"' in page.text
     assert 'id="referenceId"' in page.text
+    assert 'href="/reader-assets/favicon.svg?v=1"' in page.text
+    assert favicon.status_code == 200
+    assert "image/svg+xml" in favicon.headers["content-type"]
     assert module.status_code == 200
     assert "javascript" in module.headers["content-type"]
 
