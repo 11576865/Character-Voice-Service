@@ -1334,10 +1334,56 @@ async function syncOfflineChanges() {
   }
 }
 
+const taskNames = { queued: "排队中", running: "生成中", completed: "本次任务完成",
+  completed_with_errors: "部分片段失败", failed: "任务失败", cancelled: "已取消",
+  interrupted: "已中断", unreadable: "任务记录无法读取", none: "尚未生成" };
+let tasksTimer = null;
+let tasksLoading = false;
+async function refreshTasks() {
+  clearTimeout(tasksTimer);
+  if (tasksLoading) return;
+  tasksLoading = true;
+  const status = element("tasksStatus");
+  try {
+    const { tasks } = await (await libraryFetch("/v1/tasks")).json();
+    const rows = element("taskRows");
+    rows.replaceChildren();
+    status.textContent = tasks.length ? `${tasks.length} 本书有任务记录` : "暂无生成任务。保存书籍并提交生成后，会显示在这里。";
+    for (const task of tasks) {
+      const row = document.createElement("div");
+      row.className = "plan-row";
+      const label = document.createElement("p");
+      label.textContent = `${task.title} · ${taskNames[task.status] || task.status} · ${task.scope} · ${task.completed}/${task.total} · 新生成 ${task.generated} · 复用 ${task.reused} · 失败 ${task.failures}`;
+      const open = document.createElement("button");
+      open.textContent = "打开书籍并处理";
+      open.addEventListener("click", () => openBook(task.bookId));
+      row.append(label, open);
+      rows.append(row);
+    }
+    if (element("taskPanel").open && document.visibilityState !== "hidden") {
+      tasksTimer = setTimeout(refreshTasks, 5000);
+    }
+  } catch (error) {
+    status.textContent = `任务列表未更新：${error.message}。请确认主机在线并登录后刷新。`;
+  } finally { tasksLoading = false; }
+}
+element("refreshTasks").addEventListener("click", refreshTasks);
+element("taskPanel").addEventListener("toggle", () => {
+  if (element("taskPanel").open) refreshTasks();
+  else clearTimeout(tasksTimer);
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") clearTimeout(tasksTimer);
+  else if (element("taskPanel").open) refreshTasks();
+});
+
 async function pollJob() {
   if (!currentBookId) return;
+  const bookId = currentBookId;
+  clearTimeout(jobPoll);
   try {
-    const job = await (await libraryFetch(`/v1/books/${currentBookId}/job`)).json();
+    const job = await (await libraryFetch(`/v1/books/${bookId}/job`)).json();
+    if (bookId !== currentBookId) return;
     const names = { queued: "排队中", running: "生成中", completed: "本次任务完成",
       completed_with_errors: "部分片段失败", failed: "任务失败", cancelled: "已取消", interrupted: "已中断", none: "尚未生成" };
     ui.jobStatus.textContent = `${names[job.status] || job.status} · ${job.completed}/${job.total} · 新生成 ${job.generated || 0} · 复用 ${job.reused || 0} · 失败 ${job.errors?.length || 0}${job.error ? ` · ${job.error}` : ""}`;
@@ -1356,7 +1402,7 @@ async function pollJob() {
       if (ui.planRows.children.length && !ui.planRows.querySelector(".pending")) await previewBookPlan();
     }
   } catch (error) {
-    ui.jobStatus.textContent = `任务查询失败：${error.message}`;
+    if (bookId === currentBookId) ui.jobStatus.textContent = `任务查询失败：${error.message}`;
   }
 }
 

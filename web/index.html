@@ -76,6 +76,13 @@
       <div id="planStatus" role="status" aria-live="polite"></div>
       <div id="planRows" class="plan-rows"></div>
     </details>
+    <details id="taskPanel">
+      <summary>生成任务 · 全书库</summary>
+      <p class="muted">每本书显示最近一次任务，生成中和需要处理的任务优先。打开书籍后，可用“重试失败段落”处理失败项，或生成全书补齐缺失音频；设置一致的已有音频会复用。任务完成不代表全书音频齐全。</p>
+      <button id="refreshTasks" type="button">刷新任务列表</button>
+      <p id="tasksStatus" role="status"></p>
+      <div id="taskRows" class="plan-rows"></div>
+    </details>
     <div id="jobStatus" role="status"></div>
     <div id="productionStatus" role="status" aria-live="polite"></div>
     <p class="muted">本次任务完成不一定代表全书完成。下载到本设备：供本浏览器离线听读；同步 EPUB：文字与音频打包，需兼容的有声 EPUB 阅读器；WAV：整篇连续音频，可用普通播放器收听。修改后需重新下载离线副本或导出文件。</p>
@@ -204,6 +211,6 @@
   </div>
 
   <audio id="audio" hidden></audio>
-  <script type="module" src="/reader-assets/js/reader.js?v=16"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=17"></script>
 </body>
 </html>

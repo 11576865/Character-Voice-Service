@@ -800,6 +800,32 @@ def generate_book(book_id: str, request: GenerationRequest):
     return {"status": "queued", "book_id": book_id}
 
 
+@app.get("/v1/tasks", dependencies=[Depends(require_admin)])
+def list_tasks():
+    tasks = []
+    for book in library.list_books():
+        try:
+            job = book_job(book["id"])
+        except (OSError, ValueError, KeyError):
+            job = {"status": "unreadable", "error": "任务记录无法读取，请打开书籍检查。"}
+        if job.get("status") == "none":
+            continue
+        settings = job.get("settings") or {}
+        tasks.append({"bookId": book["id"], "title": book["title"],
+                      "status": job.get("status", "unreadable"),
+                      "completed": job.get("completed", 0), "total": job.get("total", 0),
+                      "generated": job.get("generated", 0), "reused": job.get("reused", 0),
+                      "failures": len(job.get("errors") or []),
+                      "scope": "失败项重试" if settings.get("retry_failed") else
+                               "选定段落" if settings.get("paragraphs") else "全书",
+                      "updatedAt": job.get("updatedAt", "")})
+    tasks.sort(key=lambda item: item["updatedAt"], reverse=True)
+    priority = {"running": 0, "queued": 1, "interrupted": 2, "failed": 2,
+                "completed_with_errors": 2, "unreadable": 2, "cancelled": 3}
+    tasks.sort(key=lambda item: priority.get(item["status"], 4))
+    return {"tasks": tasks}
+
+
 @app.get("/v1/books/{book_id}/job", dependencies=[Depends(require_admin)])
 def book_job(book_id: str):
     get_book_or_404(book_id)
