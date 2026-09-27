@@ -77,16 +77,20 @@ class BookRequest(BaseModel):
     client_document_id: str | None = None
 
 
-class GenerationRequest(BaseModel):
+class ReadingSettings(BaseModel):
     voice: str
     model_id: str | None = None
     reference_id: str | None = None
+    fixed_reference_id: str | None = None
     speed: float = 1.0
     continuous_emotion: bool = False
     continuity_span: Literal[1, 2] = 1
+    speaker_analysis: bool = False
+
+
+class GenerationRequest(ReadingSettings):
     paragraphs: list[str] | None = None
     retry_failed: bool = False
-    speaker_analysis: bool = False
 
 
 class SelectionRequest(BaseModel):
@@ -367,7 +371,32 @@ def create_book(request: BookRequest):
 
 @app.get("/v1/books/{book_id}", dependencies=[Depends(require_admin)])
 def get_book(book_id: str):
-    return get_book_or_404(book_id)
+    book = get_book_or_404(book_id)
+    book["readingSettings"] = book_settings(book_id)
+    return book
+
+
+def book_settings(book_id: str) -> dict | None:
+    book = get_book_or_404(book_id)
+    settings = book.get("readingSettings") or library.job(book_id).get("settings")
+    if not settings:
+        return None
+    return ReadingSettings.model_validate(settings).model_dump()
+
+
+@app.put("/v1/books/{book_id}/reading-settings", dependencies=[Depends(require_admin)])
+def save_reading_settings(book_id: str, request: ReadingSettings):
+    get_book_or_404(book_id)
+    if not 0 < request.speed < float("inf"):
+        raise HTTPException(status_code=400, detail="Speed must be finite and positive")
+    effective_selection(request.voice, request.model_id, request.reference_id, "")
+    if request.fixed_reference_id:
+        effective_selection(request.voice, request.model_id, request.fixed_reference_id, "")
+    with jobs_lock:
+        if book_id in active_jobs:
+            raise HTTPException(status_code=409, detail="请先取消或等待生成任务完成，再保存声音设置。")
+        library.save_reading_settings(book_id, request.model_dump())
+    return {"settings": request.model_dump()}
 
 
 @app.put("/v1/books/{book_id}/source", dependencies=[Depends(require_admin)])
@@ -451,6 +480,7 @@ def offline_manifest(book_id: str):
     require_current_audio(book_id)
     try:
         manifest = library.offline_manifest(book_id)
+        manifest["book"]["readingSettings"] = book_settings(book_id)
         manifest["voices"] = voices()["voices"]
         return manifest
     except ValueError as exc:
@@ -612,11 +642,11 @@ def _audio_state(book_id: str, item: dict, settings: dict, versions: dict) -> st
 
 
 def require_current_audio(book_id: str, segment_id: str | None = None):
-    """Keep downloads and playback aligned with the last submitted production settings."""
+    """Keep downloads and playback aligned with the saved book settings."""
     with jobs_lock:
         if book_id in active_jobs and segment_id is None:
             raise HTTPException(status_code=409, detail="生成任务仍在运行，请完成或取消后再导出。")
-    settings = library.job(book_id).get("settings")
+    settings = book_settings(book_id)
     if not settings:
         return
     versions = library.versions(book_id)
@@ -656,7 +686,7 @@ def preview_book_plan(book_id: str, request: GenerationRequest,
 @app.get("/v1/books/{book_id}/audio-status", dependencies=[Depends(require_admin)])
 def book_audio_status(book_id: str):
     book = get_book_or_404(book_id)
-    settings = library.job(book_id).get("settings")
+    settings = book_settings(book_id)
     counts = {"ready": 0, "stale": 0, "missing": 0}
     chapters = {}
     if not settings:
@@ -760,6 +790,7 @@ def generate_book(book_id: str, request: GenerationRequest):
             settings["target_segments"] = [e["segmentId"] for e in library.job(book_id).get("errors", [])]
             if not settings["target_segments"]:
                 raise HTTPException(status_code=400, detail="当前没有记录到失败片段，请使用补齐功能。")
+        library.save_reading_settings(book_id, ReadingSettings.model_validate(settings).model_dump())
         cancel = threading.Event()
         active_jobs[book_id] = cancel
     library.set_job(book_id, {"status": "queued", "completed": 0,

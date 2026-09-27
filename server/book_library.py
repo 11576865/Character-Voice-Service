@@ -106,6 +106,13 @@ class BookLibrary:
         with self.lock:
             _atomic_json(self._folder(book_id) / "book.json", book)
 
+    def save_reading_settings(self, book_id: str, settings: dict):
+        with self.lock:
+            book = self.get_book(book_id)
+            book["readingSettings"] = settings
+            book["readingSettingsUpdatedAt"] = _now()
+            _atomic_json(self._folder(book_id) / "book.json", book)
+
     def save_pronunciations(self, book_id: str, rules: dict):
         book = self.get_book(book_id)
         book["pronunciations"] = validate_rules(rules)

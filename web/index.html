@@ -99,6 +99,8 @@
     <div><label for="speed">速度</label><input id="speed" type="number" min="0.1" step="0.1" value="1.0"></div>
   </div>
     <p id="voiceModeStatus" class="muted" role="status">固定参考朗读；已保存的段落修正优先生效。</p>
+    <button id="saveReadingSettings" type="button">保存本书声音设置</button>
+    <p id="readingSettingsStatus" class="muted" role="status">打开书库中的书后可保存。重新打开时恢复；启动生成也会保存当前设置。</p>
     <details id="intelligentPanel" class="plan-panel">
       <summary>智能编排 · 可选增强</summary>
       <p class="muted">需要时开启以下功能。折叠此区域不会关闭已启用的选项；上方会显示当前状态。</p>
@@ -202,6 +204,6 @@
   </div>
 
   <audio id="audio" hidden></audio>
-  <script type="module" src="/reader-assets/js/reader.js?v=15"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=16"></script>
 </body>
 </html>

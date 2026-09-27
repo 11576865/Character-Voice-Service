@@ -34,6 +34,7 @@ const ui = {
   saveBook: element("saveBook"), generateBook: element("generateBook"),
   continuousEmotion: element("continuousEmotion"),
   continuitySpan: element("continuitySpan"),
+  saveReadingSettings: element("saveReadingSettings"), readingSettingsStatus: element("readingSettingsStatus"),
   automaticReference: element("automaticReference"), speakerAnalysis: element("speakerAnalysis"),
   voiceModeStatus: element("voiceModeStatus"),
   cancelGeneration: element("cancelGeneration"), libraryBooks: element("libraryBooks"),
@@ -353,6 +354,9 @@ function playbackOptions() {
   const speed = Number(ui.speed.value);
   if (!ui.voice.value) throw new Error("请选择角色。");
   if (!Number.isFinite(speed) || speed <= 0) throw new Error("速度必须大于 0。");
+  if ([ui.voice, ui.modelId, ui.referenceId].some(select => select.selectedOptions[0]?.dataset.unavailable)) {
+    throw new Error("本书保存的声音资源已不可用，请重新选择角色、模型和参考语音。");
+  }
   return {
     voice: ui.voice.value,
     modelId: ui.modelId.value || null,
@@ -618,6 +622,7 @@ function render(snapshot = queue.snapshot) {
   ui.automaticReference.disabled = active || loading;
   ui.continuousEmotion.disabled = active || loading || !ui.automaticReference.checked;
   ui.continuitySpan.disabled = active || loading || !ui.continuousEmotion.checked;
+  ui.saveReadingSettings.disabled = active || loading || !currentBookId || offlineMode;
   ui.voiceModeStatus.textContent = `${ui.automaticReference.checked ? "自动情绪参考已开启" : "固定参考朗读"}${ui.continuousEmotion.checked ? " · 整书连续情绪规划已开启" : ""}${ui.speakerAnalysis.checked ? " · 章节说话人分析已开启" : ""}；已保存的段落修正优先生效。`;
   ui.speed.disabled = active || loading;
   ui.useManual.disabled = loading;
@@ -672,6 +677,7 @@ function showDocument(model, metadata, id, label) {
   bookVersions = {};
   offlineAudioVersion = null;
   offlineAnnotationsSignature = "";
+  ui.readingSettingsStatus.textContent = "打开书库中的书后可保存。重新打开时恢复；启动生成也会保存当前设置。";
   renderPronunciations();
   selectedParagraph = null;
   selectedParagraphNode = null;
@@ -1103,6 +1109,7 @@ async function openOfflineBook(bookId) {
   showDocument(book.document, { author: book.author },
     book.clientDocumentId || `book:${bookId}`, `本设备离线：${book.title}`);
   currentBookId = bookId;
+  restoreReadingSettings(book.readingSettings);
   bookSegmentIds = book.segments.map(item => item.id);
   renderStoragePaths();
   annotations = book.annotations || {};
@@ -1207,6 +1214,7 @@ async function saveCurrentBook() {
     currentBookId = book.id;
     renderStoragePaths();
     const details = await (await libraryFetch(`/v1/books/${book.id}`)).json();
+    if (!details.readingSettings) await persistReadingSettings();
     bookSegmentIds = details.segments.map(item => item.id);
     if (Object.keys(annotations).length) {
       await libraryFetch(`/v1/books/${book.id}/annotations`, {
@@ -1238,6 +1246,7 @@ async function openBook(bookId) {
     showDocument(book.document, { author: book.author },
       book.clientDocumentId || `book:${bookId}`, `书库：${book.title}`);
     currentBookId = bookId;
+    restoreReadingSettings(book.readingSettings);
     bookSegmentIds = book.segments.map(item => item.id);
     renderStoragePaths();
     annotations = book.annotations || {};
@@ -1355,7 +1364,7 @@ async function refreshProductionStatus() {
   if (!currentBookId || offlineMode) return;
   const result = await (await libraryFetch(`/v1/books/${currentBookId}/audio-status`)).json();
   ui.productionStatus.textContent = result.planned
-    ? `全书音频（按最近提交的生成设置）：可用 ${result.ready}/${result.total} · 待更新 ${result.stale} · 未生成 ${result.missing}。${result.ready === result.total ? "音频已齐全，任务停止后可下载或导出。" : "请补齐后再下载或导出全书。"}`
+    ? `全书音频（按本书已保存的声音设置）：可用 ${result.ready}/${result.total} · 待更新 ${result.stale} · 未生成 ${result.missing}。${result.ready === result.total ? "音频已齐全，任务停止后可下载或导出。" : "请补齐后再下载或导出全书。"}`
     : "本书尚未提交生成设置。先预览声音安排，再生成全书或选中段落。";
   for (const chapter of result.chapters) {
     const line = document.createElement("div");
@@ -1588,14 +1597,11 @@ async function generateWholeBook(scope = {}) {
     return;
   }
   try {
-    const options = playbackOptions();
     await libraryFetch(`/v1/books/${currentBookId}/generate`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ voice: options.voice, model_id: options.modelId,
-        reference_id: options.referenceId, speed: options.speed,
-        continuous_emotion: ui.continuousEmotion.checked,
-        continuity_span: Number(ui.continuitySpan.value), ...scope })
+      body: JSON.stringify({ ...currentReadingSettings(), ...scope })
     });
+    ui.readingSettingsStatus.textContent = "已随生成任务保存本书声音设置。";
     await pollJob();
   } catch (error) {
     ui.jobStatus.textContent = `启动失败：${error.message}`;
@@ -1665,6 +1671,69 @@ async function loadSpeakerSuggestions() {
     });
     ui.speakerSuggestions.appendChild(apply);
   } catch (error) { ui.speakerSuggestions.textContent = `角色建议失败：${error.message}`; }
+}
+
+function currentReadingSettings() {
+  const options = playbackOptions();
+  return { voice: options.voice, model_id: options.modelId, reference_id: options.referenceId,
+    fixed_reference_id: ui.referenceId.value || null,
+    speed: options.speed, continuous_emotion: ui.continuousEmotion.checked,
+    continuity_span: Number(ui.continuitySpan.value), speaker_analysis: ui.speakerAnalysis.checked };
+}
+
+async function persistReadingSettings() {
+  if (!currentBookId || offlineMode) throw new Error("请先打开电脑书库中的书籍。");
+  await libraryFetch(`/v1/books/${currentBookId}/reading-settings`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(currentReadingSettings())
+  });
+  ui.readingSettingsStatus.textContent = "本书声音设置已保存；重新打开时恢复，音频按新设置核对。";
+}
+
+function restoreReadingSettings(settings) {
+  const missing = [];
+  const selectSaved = (select, value, label) => {
+    if (!value) return;
+    if (![...select.options].some(option => option.value === value)) {
+      const option = new Option(`不可用的${label}：${value}`, value);
+      option.dataset.unavailable = "true";
+      select.add(option);
+      missing.push(label);
+    }
+    select.value = value;
+  };
+  // Remove stale missing-role placeholders left by another book.
+  for (const option of [...ui.voice.options]) if (option.dataset.unavailable) option.remove();
+  selectSaved(ui.voice, settings?.voice || ui.voice.options[0]?.value, "角色");
+  syncCharacterAssets();
+  selectSaved(ui.modelId, settings?.model_id, "模型");
+  selectSaved(ui.referenceId, settings?.reference_id === "auto" ? settings?.fixed_reference_id
+    : settings?.reference_id, "参考语音");
+  ui.speed.value = settings?.speed || 1;
+  ui.automaticReference.checked = settings?.reference_id === "auto";
+  ui.continuousEmotion.checked = ui.automaticReference.checked && Boolean(settings?.continuous_emotion);
+  ui.continuitySpan.value = String(settings?.continuity_span || 1);
+  ui.speakerAnalysis.checked = Boolean(settings?.speaker_analysis);
+  ui.readingSettingsStatus.textContent = missing.length
+    ? `保存的${missing.join("、")}不可用，请重新选择后保存。`
+    : settings ? "已恢复本书声音设置；段落人工修正仍优先。"
+    : "本书尚无保存的声音设置，已使用默认固定声音。请选择并保存。";
+  render();
+}
+
+ui.saveReadingSettings.addEventListener("click", async () => {
+  try {
+    await persistReadingSettings();
+    stopForSourceChange();
+    clearPlanPreview();
+    await refreshProductionStatus();
+  } catch (error) { ui.readingSettingsStatus.textContent = `保存失败：${error.message}`; }
+});
+for (const control of [ui.voice, ui.modelId, ui.referenceId, ui.speed, ui.automaticReference,
+  ui.continuousEmotion, ui.continuitySpan, ui.speakerAnalysis]) {
+  control.addEventListener("change", () => {
+    if (currentBookId) ui.readingSettingsStatus.textContent = "声音设置已改动，尚未保存到本书；保存或启动生成后生效。";
+  });
 }
 
 ui.voice.addEventListener("change", () => {
