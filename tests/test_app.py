@@ -84,6 +84,10 @@ def test_reader_modules_are_served():
     assert "/reader-assets/js/reader.js" in page.text
     assert 'id="modelId"' in page.text
     assert 'id="referenceId"' in page.text
+    assert 'href="/reader-assets/reader.css?v=2"' in page.text
+    assert 'class="playback-bar"' in page.text
+    assert 'class="reader-layout"' in page.text
+    assert 'class="tools-grid"' in page.text
     assert 'href="/reader-assets/favicon.svg?v=1"' in page.text
     assert favicon.status_code == 200
     assert "image/svg+xml" in favicon.headers["content-type"]
