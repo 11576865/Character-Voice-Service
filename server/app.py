@@ -477,15 +477,7 @@ def get_evaluation(evaluation_id: str):
 @app.post("/v1/evaluations", dependencies=[Depends(require_admin)])
 def create_evaluation(request: EvaluationCreateRequest):
     try:
-        registry = model_manager.registry.read()
-        candidate = registry["revisions"].get(request.candidate_revision_id)
-        baseline = registry["revisions"].get(request.baseline_revision_id) \
-            if request.baseline_revision_id else None
-        if not candidate or candidate.get("character_id") != request.character_id:
-            raise ValueError("Candidate is not registered for this character")
-        if request.baseline_revision_id and (not baseline or baseline.get("character_id") != request.character_id):
-            raise ValueError("Baseline is not registered for this character")
-        return model_manager.evaluations.create(
+        return model_manager.create_evaluation(
             character_id=request.character_id, candidate_revision_id=request.candidate_revision_id,
             baseline_revision_id=request.baseline_revision_id, sample_set=request.sample_set,
             engine=request.engine, reference_set_id=request.reference_set_id,

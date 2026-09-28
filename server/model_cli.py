@@ -77,7 +77,7 @@ def main():
             output(manager.retire(args.revision_id, reason=args.reason))
         elif args.command == "evaluation-new":
             samples = json.loads(args.samples.read_text(encoding="utf-8-sig"))
-            output(manager.evaluations.create(
+            output(manager.create_evaluation(
                 character_id=args.character, candidate_revision_id=args.candidate,
                 baseline_revision_id=args.baseline, sample_set=samples,
                 engine={"id": args.engine, "adapter_version": args.adapter_version},

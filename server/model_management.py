@@ -100,6 +100,25 @@ class ModelManager:
         with self.lock:
             return self.registry.retire(revision_id, reason=reason)
 
+    def create_evaluation(self, *, character_id: str, candidate_revision_id: str,
+                          baseline_revision_id: str | None, sample_set: dict,
+                          engine: dict, reference_set_id: str = "",
+                          requested_parameters: dict | None = None) -> dict:
+        registry = self.registry.read()
+        candidate = registry["revisions"].get(candidate_revision_id)
+        baseline = registry["revisions"].get(baseline_revision_id) if baseline_revision_id else None
+        if not candidate or candidate.get("character_id") != character_id:
+            raise ValueError("Candidate is not registered for this character")
+        if candidate["lifecycle"] != "candidate":
+            raise ValueError("Evaluation candidate must have candidate lifecycle")
+        if baseline_revision_id and (not baseline or baseline.get("character_id") != character_id):
+            raise ValueError("Baseline is not registered for this character")
+        return self.evaluations.create(
+            character_id=character_id, candidate_revision_id=candidate_revision_id,
+            baseline_revision_id=baseline_revision_id, sample_set=sample_set,
+            engine=engine, reference_set_id=reference_set_id,
+            requested_parameters=requested_parameters)
+
     def _profile(self, character_id: str | None) -> dict:
         if not character_id or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", character_id):
             raise ValueError("Candidate must be assigned to a valid character")
