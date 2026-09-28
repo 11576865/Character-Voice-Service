@@ -281,7 +281,7 @@ Python 测试：
 
 ## 接下来的主线
 
-模型升级基础设施的完整设计见 [实施报告 TXT](docs/CVS_Model_Management_Implementation_Report.txt)。已提供 [Model Root 只读扫描工具](docs/model-scanner.md)，用于盘点 GPT-SoVITS 权重、关联现有角色及报告无法唯一配对的版本；候选登记、生命周期与统一 Evaluation 按报告分阶段接入。
+模型升级基础设施的完整设计见 [实施报告 TXT](docs/CVS_Model_Management_Implementation_Report.txt)。[Model Root 与 Registry 操作说明](docs/model-scanner.md)覆盖只读盘点、训练导出 manifest、候选登记、`candidate/default/retired` 生命周期以及 Evaluation v1。管理数据保存在本机 `data/model-management`，实际模型与评估音频不进入 Git。
 
 当前工作分成两条并行线：
 

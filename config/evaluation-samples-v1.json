@@ -1,0 +1,13 @@
+{
+  "sample_set_id": "cvs-core-en-v1",
+  "version": 1,
+  "description": "Original CVS English smoke and listening samples.",
+  "samples": [
+    {"sample_id": "en-short-001", "language": "en", "category": "short", "text": "A quiet morning begins beyond the station window."},
+    {"sample_id": "en-names-001", "language": "en", "category": "names_numbers", "text": "Platform Seven opens at 10:45, beside the Nova Research Annex."},
+    {"sample_id": "en-emotion-001", "language": "en", "category": "emotion", "emotion": "happy", "text": "We made it! I knew the last signal would guide us home."},
+    {"sample_id": "en-long-001", "language": "en", "category": "long", "text": "The archive had been silent for years. When the final lamp flickered on, every map on the wall pointed toward the same forgotten harbor."},
+    {"sample_id": "en-continuity-001", "language": "en", "category": "continuity", "group": "continuity-1", "order": 1, "text": "I found the letter beneath the old clock."},
+    {"sample_id": "en-continuity-002", "language": "en", "category": "continuity", "group": "continuity-1", "order": 2, "text": "The handwriting was familiar, but the date made no sense."}
+  ]
+}

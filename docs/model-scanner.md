@@ -29,3 +29,29 @@
 布局版本依据文件夹名称，只是发现信息，不代表检查过权重内部架构。扫描不反序列化 checkpoint。文件路径变化不影响完整内容 revision；同一路径内容改变会产生不同 revision。
 
 扫描器目前只实现 GPT-SoVITS 目录布局，未识别文件显示在 issues；其他引擎需要新增扫描适配器。完整报告包含本机信息，请勿直接提交到公开仓库。
+
+## 自动关联下一代模型
+
+训练导出目录可放置任意名称以 `.cvs-model.json` 结尾的清单。格式参考 `config/model-export-manifest.example.json`。清单使用相对于 Model Root 的权重路径，并明确 `character_id`、`model_id`、语言和 GPT/SoVITS 文件。扫描器会优先采用清单，并跳过对这两份文件的文件名猜测。
+
+清单应在两份权重写完后最后写入。现有模型布局仍能扫描；当目录里有多轮权重而没有清单时，保持 `ambiguous`，等待明确配对。
+
+完整扫描并登记：
+
+```powershell
+.\scripts\manage_models.cmd scan --hash --register
+```
+
+首次登记时，现有角色配置中的当前默认权重进入 Registry 的 `default`；其他新版本进入 `candidate`。重复运行不会重复创建 revision。Registry、审计事件和扫描结果保存在 `data/model-management`。
+
+查看、分配和提升：
+
+```powershell
+.\scripts\manage_models.cmd list
+.\scripts\manage_models.cmd assign rev-... --character march-7th --model-id trained-en --language en --reason "确认训练线"
+.\scripts\manage_models.cmd promote rev-... --evaluation eval-... --reason "固定样本与试听通过"
+```
+
+没有 Evaluation 时只有显式增加 `--manual-override` 才能提升。提升会核对权重 SHA-256，将角色配置加入 revision 专属模型项并切换默认；原默认进入 `retired`。Registry 中的绝对根目录由本机 `roots.json` 提供，不写入可提交文件。
+
+Evaluation v1 的正式字段见 `config/evaluation-v1.schema.json`，固定原创英文样本见 `config/evaluation-samples-v1.json`。记录支持草稿、运行、完成、取消和失败状态，逐样本保存候选/基线结果，人工评分与最终决策分开。所有样本与所有对照 revision 都有终态结果后，才能标为 completed；只有决策为 promote 的对应 Evaluation 才可用于正常提升。

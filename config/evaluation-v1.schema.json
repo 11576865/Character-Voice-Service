@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cvs.local/schemas/evaluation-v1.schema.json",
+  "title": "CVS Model Evaluation v1",
+  "type": "object",
+  "required": ["schema_version", "evaluation_id", "created_at", "updated_at", "status", "character_id", "candidate_revision_id", "sample_set", "engine", "requested_parameters", "effective_parameters", "unsupported_parameters", "results", "human_reviews", "decision"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "evaluation_id": {"type": "string", "pattern": "^eval-[0-9a-f]{24}$"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "status": {"enum": ["draft", "running", "completed", "cancelled", "failed"]},
+    "character_id": {"type": "string", "minLength": 1},
+    "candidate_revision_id": {"type": "string", "minLength": 1},
+    "baseline_revision_id": {"type": ["string", "null"]},
+    "sample_set": {"type": "object", "required": ["samples", "sha256"], "properties": {"samples": {"type": "array", "minItems": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "reference_set_id": {"type": "string"},
+    "engine": {"type": "object"},
+    "requested_parameters": {"type": "object"},
+    "effective_parameters": {"type": "object"},
+    "unsupported_parameters": {"type": "array", "items": {"type": "string"}},
+    "results": {"type": "array", "items": {"$ref": "#/$defs/result"}},
+    "human_reviews": {"type": "array", "items": {"$ref": "#/$defs/review"}},
+    "decision": {"type": "object", "required": ["value", "reason", "reviewed_at"], "properties": {"value": {"enum": ["pending", "promote", "keep_default", "reject", "inconclusive"]}, "reason": {"type": "string"}, "reviewed_at": {"type": ["string", "null"]}}}
+  },
+  "$defs": {
+    "result": {"type": "object", "required": ["sample_id", "model_revision_id", "status"], "properties": {"sample_id": {"type": "string"}, "model_revision_id": {"type": "string"}, "status": {"enum": ["pending", "success", "failed", "unsupported"]}, "audio_artifact_id": {"type": ["string", "null"]}, "audio_sha256": {"type": ["string", "null"]}, "queue_ms": {"type": ["number", "null"], "minimum": 0}, "load_ms": {"type": ["number", "null"], "minimum": 0}, "synthesis_ms": {"type": ["number", "null"], "minimum": 0}, "audio_duration_ms": {"type": ["number", "null"], "minimum": 0}, "real_time_factor": {"type": ["number", "null"], "minimum": 0}, "error_code": {"type": ["string", "null"]}, "error_message": {"type": ["string", "null"]}}},
+    "review": {"type": "object", "required": ["review_id", "created_at", "blind_pair_id", "preference", "ratings", "notes"], "properties": {"preference": {"enum": ["a", "b", "similar", "both_problematic"]}, "ratings": {"type": "object", "additionalProperties": {"type": ["integer", "null"], "minimum": 1, "maximum": 5}}}}
+  }
+}

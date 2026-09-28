@@ -78,3 +78,24 @@ def test_config_validation_and_legacy_profiles(tmp_path):
     (voices / "legacy.json").write_text('{"reference_audio": "old.wav"}', encoding="utf-8")
     report = scan(roots(root), voices)
     assert next(item for item in report["profile_links"] if item["character_id"] == "legacy")["status"] == "unmanaged"
+
+
+def test_export_manifest_assigns_new_training_line_without_filename_guessing(tmp_path):
+    root = tmp_path / "models"
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    gpt = root / "outputs" / "model-final.bin"
+    sovits = root / "outputs" / "voice-final.data"
+    for path, value in ((gpt, b"gpt"), (sovits, b"sovits")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(value)
+    manifest = {"schema_version": 1, "engine": "gpt-sovits", "character_id": "march-7th",
+                "model_id": "trained-en", "target_language": "en", "layout": "v-next",
+                "name": "March 7th next", "artifacts": {
+                    "gpt": "outputs/model-final.bin", "sovits": "outputs/voice-final.data"}}
+    (root / "march-next.cvs-model.json").write_text(json.dumps(manifest), encoding="utf-8")
+    report = scan(roots(root), voices, full_hash=True)
+    assert report["summary"]["paired"] == 1
+    assert report["models"][0]["association"] == "declared"
+    assert report["models"][0]["declared_assignment"]["character_id"] == "march-7th"
+    assert report["models"][0]["revision_id"].startswith("rev-")

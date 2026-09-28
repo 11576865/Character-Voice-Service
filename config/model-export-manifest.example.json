@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "engine": "gpt-sovits",
+  "character_id": "march-7th",
+  "model_id": "trained-en",
+  "target_language": "en",
+  "layout": "v4",
+  "name": "March 7th training 2026-09",
+  "artifacts": {
+    "gpt": "GPT_weights_v4/March7-next-e10.ckpt",
+    "sovits": "SoVITS_weights_v4/March7-next_e10_s840.pth"
+  }
+}

@@ -16,13 +16,14 @@ import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from server.backends.gpt_sovits import synthesize
 from server.book_library import BookLibrary
 from server.emotion_router import choose_reference, emotion_cues
 from server.epub_export import export_read_aloud
 from server.document_import import parse_document
+from server.model_management import ModelManager
 from server.speaker_suggestions import suggest_speakers
 from server.pronunciations import spoken_text
 from server.config import (
@@ -54,6 +55,7 @@ FOLIATE_DIR = WEB_DIR.parent / "vendor" / "foliate-js"
 if FOLIATE_DIR.is_dir():
     app.mount("/foliate-assets", StaticFiles(directory=FOLIATE_DIR), name="foliate-assets")
 library = BookLibrary(DATA_DIR)
+model_manager = ModelManager(DATA_DIR / "model-management", VOICE_DIR)
 generation_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cvs-book")
 active_jobs: dict[str, threading.Event] = {}
 jobs_lock = threading.Lock()
@@ -100,6 +102,53 @@ class SelectionRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     token: str
+
+
+class ModelScanRequest(BaseModel):
+    full_hash: bool = False
+    register_candidates: bool = Field(False, alias="register")
+
+
+class ModelAssignmentRequest(BaseModel):
+    character_id: str
+    model_id: str
+    target_language: str = ""
+    reason: str
+
+
+class ModelTransitionRequest(BaseModel):
+    reason: str
+    evaluation_id: str | None = None
+    allow_without_evaluation: bool = False
+
+
+class EvaluationCreateRequest(BaseModel):
+    character_id: str
+    candidate_revision_id: str
+    baseline_revision_id: str | None = None
+    sample_set: dict
+    engine: dict
+    reference_set_id: str = ""
+    requested_parameters: dict = Field(default_factory=dict)
+
+
+class EvaluationUpdateRequest(BaseModel):
+    status: str | None = None
+    effective_parameters: dict | None = None
+    unsupported_parameters: list[str] | None = None
+    result: dict | None = None
+
+
+class EvaluationReviewRequest(BaseModel):
+    blind_pair_id: str
+    preference: str
+    ratings: dict
+    notes: str = ""
+
+
+class EvaluationDecisionRequest(BaseModel):
+    decision: str
+    reason: str
 
 
 def _session_value() -> str:
@@ -352,6 +401,126 @@ def speech(request: SpeechRequest):
         media_type="audio/wav",
         headers=headers,
     )
+
+
+def model_management_error(exc: Exception):
+    if isinstance(exc, KeyError):
+        raise HTTPException(status_code=404, detail="Model revision or Evaluation not found") from exc
+    if isinstance(exc, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Model management record not found") from exc
+    if isinstance(exc, (ValueError, OSError, json.JSONDecodeError)):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise exc
+
+
+@app.get("/v1/model-registry", dependencies=[Depends(require_admin)])
+def get_model_registry():
+    try:
+        return model_manager.registry.read()
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.post("/v1/model-registry/scan", dependencies=[Depends(require_admin)])
+def scan_model_roots(request: ModelScanRequest):
+    if request.register_candidates and not request.full_hash:
+        raise HTTPException(status_code=400, detail="Registration requires full_hash=true")
+    try:
+        return model_manager.scan(full_hash=request.full_hash, register=request.register_candidates)
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.post("/v1/model-registry/{revision_id}/assign", dependencies=[Depends(require_admin)])
+def assign_model_revision(revision_id: str, request: ModelAssignmentRequest):
+    try:
+        return model_manager.assign(revision_id, request.character_id, request.model_id,
+                                    request.target_language, request.reason)
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.post("/v1/model-registry/{revision_id}/promote", dependencies=[Depends(require_admin)])
+def promote_model_revision(revision_id: str, request: ModelTransitionRequest):
+    with jobs_lock:
+        if active_jobs:
+            raise HTTPException(status_code=409, detail="Wait for active or queued generation tasks to finish")
+    try:
+        return model_manager.promote(revision_id, reason=request.reason,
+                                     evaluation_id=request.evaluation_id,
+                                     allow_without_evaluation=request.allow_without_evaluation)
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.post("/v1/model-registry/{revision_id}/retire", dependencies=[Depends(require_admin)])
+def retire_model_revision(revision_id: str, request: ModelTransitionRequest):
+    try:
+        return model_manager.retire(revision_id, reason=request.reason)
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.get("/v1/evaluations", dependencies=[Depends(require_admin)])
+def list_evaluations():
+    return {"evaluations": model_manager.evaluations.list()}
+
+
+@app.get("/v1/evaluations/{evaluation_id}", dependencies=[Depends(require_admin)])
+def get_evaluation(evaluation_id: str):
+    try:
+        return model_manager.evaluations.get(evaluation_id)
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.post("/v1/evaluations", dependencies=[Depends(require_admin)])
+def create_evaluation(request: EvaluationCreateRequest):
+    try:
+        registry = model_manager.registry.read()
+        candidate = registry["revisions"].get(request.candidate_revision_id)
+        baseline = registry["revisions"].get(request.baseline_revision_id) \
+            if request.baseline_revision_id else None
+        if not candidate or candidate.get("character_id") != request.character_id:
+            raise ValueError("Candidate is not registered for this character")
+        if request.baseline_revision_id and (not baseline or baseline.get("character_id") != request.character_id):
+            raise ValueError("Baseline is not registered for this character")
+        return model_manager.evaluations.create(
+            character_id=request.character_id, candidate_revision_id=request.candidate_revision_id,
+            baseline_revision_id=request.baseline_revision_id, sample_set=request.sample_set,
+            engine=request.engine, reference_set_id=request.reference_set_id,
+            requested_parameters=request.requested_parameters)
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.put("/v1/evaluations/{evaluation_id}", dependencies=[Depends(require_admin)])
+def update_evaluation(evaluation_id: str, request: EvaluationUpdateRequest):
+    try:
+        return model_manager.evaluations.update(
+            evaluation_id, status=request.status, effective_parameters=request.effective_parameters,
+            unsupported_parameters=request.unsupported_parameters, result=request.result)
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.post("/v1/evaluations/{evaluation_id}/reviews", dependencies=[Depends(require_admin)])
+def review_evaluation(evaluation_id: str, request: EvaluationReviewRequest):
+    try:
+        return model_manager.evaluations.review(
+            evaluation_id, blind_pair_id=request.blind_pair_id,
+            preference=request.preference, ratings=request.ratings, notes=request.notes)
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.post("/v1/evaluations/{evaluation_id}/decision", dependencies=[Depends(require_admin)])
+def decide_evaluation(evaluation_id: str, request: EvaluationDecisionRequest):
+    try:
+        return model_manager.evaluations.decide(
+            evaluation_id, decision=request.decision, reason=request.reason)
+    except Exception as exc:
+        return model_management_error(exc)
 
 
 @app.get("/v1/books", dependencies=[Depends(require_admin)])

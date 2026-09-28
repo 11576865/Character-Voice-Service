@@ -218,3 +218,21 @@ E7 第二个真实引擎验证
 本机采用 metadata_only 模式，尚未读取全部真实权重计算完整 SHA-256；所以实际权重的 revision_id 保持空值。测试使用小型模拟文件验证完整哈希、移动路径身份稳定及内容变化身份变化，不把测试文件结果当成真实模型质量证明。
 
 测试结果：73 项后端测试通过，其中 4 项为本轮新增扫描测试。没有启动真实生成，没有变更角色默认模型。下一实施点是 E2：基于扫描结果建立候选注册和可回退迁移；Evaluation、网页候选管理、生产 revision 接入和新引擎兼容均仍为后续工作。
+
+十五、E2/E3 实施更新（2026-09-28）
+
+E2 候选 Registry 与生命周期已经实现。权威文件为本机 data/model-management/registry.json，格式定义为 config/model-registry-v1.schema.json。扫描使用完整 SHA-256 后才能登记；同一内容重复扫描不重复，新内容生成新 revision。首次导入把现有角色配置正在使用的模型登记为 default；同一训练线后续 revision 自动继承角色关联并保持 candidate。未能关联角色的权重可以保留为未分配 candidate，确认角色和 model_id 后再分配。
+
+生命周期操作现支持 candidate、default、retired。每个“角色 + 目标语言”范围只允许一个 default。提升候选会核对组成权重的实时 SHA-256，向角色 v2 配置写入 revision 专属模型项，切换 default_model，并将原默认标为 retired；当前 default 不能直接退役。旧 revision 文件仍存在且哈希一致时，可以通过再次提升实现回退。登记、分配、提升、退役及可用性变更均形成审计事件。
+
+正常提升要求一个已完成、候选 revision 匹配、最终 decision=promote 的 Evaluation。确有必要时命令行提供显式 manual override，理由仍会进入审计。整书生成任务处于运行或排队状态时，管理 API 拒绝提升。当前生产激活适用于 GPT-SoVITS；其他引擎可进入未来 Registry 适配扩展，尚不能借此宣称可生产推理。
+
+训练导出可提供任意名称的 *.cvs-model.json。config/model-export-manifest.example.json 定义角色、稳定训练线 model_id、语言、布局和两份相对权重路径。扫描器优先使用清单，因此新模型文件不必符合现有 epoch 文件名猜测规则；清单所列权重不会再被普通目录规则重复发现。无清单的模糊多轮权重仍不自动配对。
+
+E3 统一 Evaluation v1 存储格式已经实现。正式 Schema 为 config/evaluation-v1.schema.json，原创固定英文样本为 config/evaluation-samples-v1.json。记录包含候选与基线 revision、样本集哈希、引擎和适配器信息、请求参数、实际参数、不支持参数、每个样本的生成状态/音频指纹/计时/错误、人工 A/B 选择、五类评分和最终决策。相同“样本 + revision”的结果可覆盖，支持中断后继续；所有样本与全部对照 revision 都有终态结果后才能标记 completed，完成前不能写最终决策。
+
+私有 API 提供扫描登记、Registry 查询、候选分配、提升、退役、Evaluation 创建/更新/评审/决策。scripts/manage_models.cmd 提供对应本机命令入口，详细操作见 docs/model-scanner.md。API、Registry、Evaluation 记录需要书库认证；公网角色列表不暴露路径。
+
+此次实现没有生成 Evaluation 音频，也没有进行真实语音试听。Evaluation 的统一记录和约束已可使用；自动批量生成评估音频与 A/B 网页界面属于后续交互阶段。生产音频指纹全面改用 Registry revision、书籍 pinned/follow_default 策略、通用 Engine Adapter 以及网页模型管理仍按 E4–E6 继续。
+
+代码验证结果更新为：82 项后端测试和 3 项网页逻辑测试通过。真实目录完整哈希登记及登记结果另在部署时核验，不把代码测试视为模型推理兼容或声音质量证明。
