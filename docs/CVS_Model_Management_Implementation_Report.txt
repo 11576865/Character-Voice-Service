@@ -236,3 +236,7 @@ E3 统一 Evaluation v1 存储格式已经实现。正式 Schema 为 config/eval
 此次实现没有生成 Evaluation 音频，也没有进行真实语音试听。Evaluation 的统一记录和约束已可使用；自动批量生成评估音频与 A/B 网页界面属于后续交互阶段。生产音频指纹全面改用 Registry revision、书籍 pinned/follow_default 策略、通用 Engine Adapter 以及网页模型管理仍按 E4–E6 继续。
 
 代码验证结果更新为：82 项后端测试和 3 项网页逻辑测试通过。真实目录完整哈希登记及登记结果另在部署时核验，不把代码测试视为模型推理兼容或声音质量证明。
+
+真实部署核验：本机模型目录完整 SHA-256 扫描得到 11 个 revision，9 个现有角色 revision 保持 default，昔涟和刻律德菈的两组权重作为未分配 candidate，0 个 retired，0 个扫描问题；Registry 产生 11 条初始审计事件。本机与公网受保护 Registry API 均正常响应。此次只读取权重并建立身份，没有反序列化或推理。
+
+提升写入增加 pending-transition 恢复记录。Registry 与角色配置之间发生进程退出或写入异常时，下次 ModelManager 初始化会恢复提升前的两份数据，避免只切换其中一边。成功完成后恢复记录立即清除。

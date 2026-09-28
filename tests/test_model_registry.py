@@ -82,3 +82,21 @@ def test_registry_rejects_corruption_and_missing_root(tmp_path):
     with pytest.raises(ValueError, match="Default index"):
         ModelRegistry(path).read()
 
+
+def test_incomplete_profile_transition_is_rolled_back_on_restart(tmp_path):
+    manager, root, voices, gpt, sovits = setup_manager(tmp_path)
+    manager.scan(full_hash=True, register=True)
+    before_registry = manager.registry.read()
+    before_profile = json.loads((voices / "role.json").read_text(encoding="utf-8"))
+    from server.model_registry import atomic_json
+    atomic_json(manager.pending_path, {"schema_version": 1, "character_id": "role",
+                                       "before_registry": before_registry,
+                                       "before_profile": before_profile})
+    atomic_json(manager.registry.path, {"schema_version": 1, "revisions": {}, "defaults": {}, "events": []})
+    broken = {**before_profile, "default_model": "half-written"}
+    atomic_json(voices / "role.json", broken)
+    recovered = ModelManager(manager.root, voices)
+    assert recovered.registry.read() == before_registry
+    assert json.loads((voices / "role.json").read_text(encoding="utf-8")) == before_profile
+    assert not recovered.pending_path.exists()
+

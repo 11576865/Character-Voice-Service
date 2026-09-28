@@ -19,6 +19,22 @@ class ModelManager:
         self.registry = ModelRegistry(root / "registry.json")
         self.evaluations = EvaluationStore(root / "evaluations")
         self.lock = threading.RLock()
+        self.pending_path = root / "pending-transition.json"
+        self.recover_pending_transition()
+
+    def recover_pending_transition(self) -> bool:
+        if not self.pending_path.is_file():
+            return False
+        import json
+        pending = json.loads(self.pending_path.read_text(encoding="utf-8-sig"))
+        character_id = pending.get("character_id")
+        if not character_id or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", character_id):
+            raise ValueError("Invalid pending model transition")
+        profile_path = self.voice_dir / f"{character_id}.json"
+        atomic_json(self.registry.path, pending["before_registry"])
+        atomic_json(profile_path, pending["before_profile"])
+        self.pending_path.unlink()
+        return True
 
     def scan(self, *, full_hash: bool, register: bool = False) -> dict:
         with self.lock:
@@ -64,13 +80,19 @@ class ModelManager:
                 "gpt_weights": str(artifacts["gpt"]), "sovits_weights": str(artifacts["sovits"])}
             updated_profile["default_model"] = profile_model_id
             profile_path = self.voice_dir / f"{character_id}.json"
+            atomic_json(self.pending_path, {"schema_version": 1, "character_id": character_id,
+                                            "before_registry": before,
+                                            "before_profile": profile})
             try:
                 result = self.registry.promote(revision_id, reason=reason, evaluation_id=evaluation_id,
                                                profile_model_id=profile_model_id)
                 atomic_json(profile_path, updated_profile)
             except Exception:
                 atomic_json(self.registry.path, before)
+                atomic_json(profile_path, profile)
+                self.pending_path.unlink(missing_ok=True)
                 raise
+            self.pending_path.unlink()
             return {**result, "profile_model_id": profile_model_id,
                     "production_applied": True}
 
