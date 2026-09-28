@@ -925,6 +925,7 @@ async function regenerateParagraph() {
     }
     if (controller !== regenerationController) return;
     await variantStore.add(paragraphKey(position.segment), clips, {
+      settingsVersion: 1,
       voice: options.voice, modelId: options.modelId,
       referenceId: options.referenceId, speed: options.speed
     });
