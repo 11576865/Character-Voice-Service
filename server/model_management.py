@@ -1,5 +1,6 @@
 """Coordinate scanning, registry lifecycle, Evaluations, and profile activation."""
 
+import json
 import re
 import threading
 from copy import deepcopy
@@ -41,7 +42,33 @@ class ModelManager:
             report = scan(read_roots(self.roots_path), self.voice_dir, full_hash=full_hash)
             atomic_json(self.scan_path, report)
             registration = self.registry.import_scan(report) if register else None
+            if registration is not None:
+                registration["profile_links_updated"] = self.sync_profile_revision_links()
             return {"report": report, "registration": registration}
+
+    def sync_profile_revision_links(self) -> int:
+        """Backfill immutable revision IDs into models already used by profiles."""
+        registry = self.registry.read()
+        changed = 0
+        for revision in registry["revisions"].values():
+            if revision.get("lifecycle") != "default" or not revision.get("character_id"):
+                continue
+            model_id = revision.get("profile_model_id") or revision.get("model_id")
+            if not model_id:
+                continue
+            profile_path = self.voice_dir / f'{revision["character_id"]}.json'
+            if not profile_path.is_file():
+                continue
+            profile = json.loads(profile_path.read_text(encoding="utf-8-sig"))
+            models = profile.get("models")
+            if not isinstance(models, dict) or not isinstance(models.get(model_id), dict):
+                continue
+            if models[model_id].get("revision_id") == revision["revision_id"]:
+                continue
+            models[model_id]["revision_id"] = revision["revision_id"]
+            atomic_json(profile_path, profile)
+            changed += 1
+        return changed
 
     def assign(self, revision_id: str, character_id: str, model_id: str,
                target_language: str, reason: str) -> dict:
@@ -111,8 +138,20 @@ class ModelManager:
             raise ValueError("Candidate is not registered for this character")
         if candidate["lifecycle"] != "candidate":
             raise ValueError("Evaluation candidate must have candidate lifecycle")
-        if baseline_revision_id and (not baseline or baseline.get("character_id") != character_id):
-            raise ValueError("Baseline is not registered for this character")
+        if candidate.get("availability") != "available":
+            raise ValueError("Evaluation candidate must be available")
+        if baseline_revision_id and (not baseline or baseline.get("character_id") != character_id or
+                                     baseline.get("scope") != candidate.get("scope")):
+            raise ValueError("Baseline is not registered for the same character and language")
+        if baseline and (baseline.get("lifecycle") != "default" or
+                         baseline.get("engine") != candidate.get("engine")):
+            raise ValueError("Evaluation baseline must be the current default for the same engine")
+        if candidate.get("engine") != "gpt-sovits":
+            raise ValueError("Automatic Evaluation currently supports only gpt-sovits")
+        if reference_set_id:
+            profile = self._profile(character_id)
+            if reference_set_id not in (profile.get("references") or {}):
+                raise ValueError("Evaluation reference does not exist in the character profile")
         return self.evaluations.create(
             character_id=character_id, candidate_revision_id=candidate_revision_id,
             baseline_revision_id=baseline_revision_id, sample_set=sample_set,
@@ -125,7 +164,6 @@ class ModelManager:
         path = self.voice_dir / f"{character_id}.json"
         if not path.is_file():
             raise ValueError("Character profile does not exist")
-        import json
         return json.loads(path.read_text(encoding="utf-8-sig"))
 
     @staticmethod

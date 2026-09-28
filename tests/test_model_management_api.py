@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 
 import server.app as api
 from tests.test_evaluations import SAMPLES
@@ -27,6 +28,16 @@ def test_registry_and_evaluation_endpoints_are_private_and_connected(tmp_path, m
         "engine": {"id": "gpt-sovits", "adapter_version": "1"}})
     assert created.status_code == 200
     evaluation_id = created.json()["evaluation_id"]
+    runs = []
+    class ImmediatePool:
+        def submit(self, function, *args):
+            function(*args)
+    monkeypatch.setattr(api, "evaluation_runner", SimpleNamespace(
+        run=lambda selected_id, cancel: runs.append(selected_id)))
+    monkeypatch.setattr(api, "evaluation_pool", ImmediatePool())
+    assert runs == []
+    assert client.post(f"/v1/evaluations/{evaluation_id}/run").status_code == 200
+    assert runs == [evaluation_id]
     for revision, digest in ((candidate_id, "a" * 64), (baseline_id, "b" * 64)):
         assert client.put(f"/v1/evaluations/{evaluation_id}", json={"result": {
             "sample_id": "en-short-001", "model_revision_id": revision,

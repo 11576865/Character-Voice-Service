@@ -59,7 +59,11 @@ const ui = {
   planRows: element("planRows"), retryFailed: element("retryFailed"),
   selectPlanAll: element("selectPlanAll"), batchPlanVoice: element("batchPlanVoice"),
   batchPlanReference: element("batchPlanReference"), applyPlanBatch: element("applyPlanBatch"),
-  generateSelectedPlan: element("generateSelectedPlan"), productionStatus: element("productionStatus")
+  generateSelectedPlan: element("generateSelectedPlan"), productionStatus: element("productionStatus"),
+  modelPanel: element("modelPanel"), refreshModels: element("refreshModels"),
+  scanModels: element("scanModels"), registerModels: element("registerModels"),
+  modelStatus: element("modelStatus"), modelRows: element("modelRows"),
+  evaluationRows: element("evaluationRows"), evaluationReview: element("evaluationReview")
 };
 
 const progressStore = new ProgressStore();
@@ -104,6 +108,8 @@ let offlineAudioVersion = null;
 let offlineAnnotationsSignature = "";
 let sleepTimer = null;
 let storageInfo = null;
+let modelRegistry = null;
+let evaluationTimer = null;
 
 function bookmarkKey() { return `cvs.bookmarks.v1:${documentId || "manual"}`; }
 
@@ -1386,6 +1392,251 @@ document.addEventListener("visibilitychange", () => {
   else if (element("taskPanel").open) refreshTasks();
 });
 
+const lifecycleNames = { candidate: "候选", default: "当前默认", retired: "已停用" };
+const evaluationNames = { draft: "待开始", running: "生成中", completed: "已完成",
+  cancelled: "已取消，可继续", failed: "失败，可继续" };
+
+function actionButton(label, action, className = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.className = className;
+  button.addEventListener("click", action);
+  return button;
+}
+
+async function scanModelRoots(register) {
+  ui.modelStatus.textContent = register
+    ? "正在计算模型文件校验值并登记；大模型较多时需要等待。"
+    : "正在检查模型目录。";
+  ui.scanModels.disabled = ui.registerModels.disabled = true;
+  try {
+    const response = await libraryFetch("/v1/model-registry/scan", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ full_hash: register, register })
+    });
+    const payload = await response.json();
+    const added = payload.registration?.added?.length || 0;
+    ui.modelStatus.textContent = register
+      ? `完整扫描完成：发现 ${payload.report.models?.length || 0} 个模型组合，新登记 ${added} 个。`
+      : `快速扫描完成：发现 ${payload.report.models?.length || 0} 个模型组合；本次没有修改注册表。`;
+    await loadModelManagement(false);
+  } catch (error) { ui.modelStatus.textContent = `扫描失败：${error.message}`; }
+  finally { ui.scanModels.disabled = ui.registerModels.disabled = false; }
+}
+
+async function assignRevision(revision, select) {
+  const voice = voiceCatalog.get(select.value);
+  if (!voice) return;
+  const modelId = String(revision.name || "model").normalize("NFKD")
+    .replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[._-]+|[._-]+$/g, "").slice(0, 48) || "model";
+  try {
+    await libraryFetch(`/v1/model-registry/${revision.revision_id}/assign`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ character_id: voice.id, model_id: modelId,
+        target_language: voice.target_language || "", reason: "网页中确认角色归属" })
+    });
+    ui.modelStatus.textContent = `已把 ${revision.name} 登记到 ${voice.name || voice.id}。`;
+    await loadModelManagement(false);
+  } catch (error) { ui.modelStatus.textContent = `登记失败：${error.message}`; }
+}
+
+async function createEvaluation(revision) {
+  const baseline = modelRegistry?.defaults?.[revision.scope];
+  if (!baseline) { ui.modelStatus.textContent = "这个角色还没有当前默认模型，无法建立 A/B 对照。"; return; }
+  try {
+    const sampleSet = await (await libraryFetch("/v1/evaluation-sample-sets/default")).json();
+    const response = await libraryFetch("/v1/evaluations", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ character_id: revision.character_id,
+        candidate_revision_id: revision.revision_id, baseline_revision_id: baseline,
+        sample_set: sampleSet, engine: { id: revision.engine, adapter_version: "1" },
+        reference_set_id: "", requested_parameters: { speed: 1 } })
+    });
+    const evaluation = await response.json();
+    ui.modelStatus.textContent = "评估记录已建立。尚未生成音频；请在右侧明确点击开始。";
+    await loadModelManagement(false);
+    await showEvaluation(evaluation.evaluation_id);
+  } catch (error) { ui.modelStatus.textContent = `无法建立评估：${error.message}`; }
+}
+
+function renderModelRegistry() {
+  ui.modelRows.replaceChildren();
+  const revisions = Object.values(modelRegistry?.revisions || {});
+  if (!revisions.length) ui.modelRows.textContent = "注册表为空。先执行完整扫描并登记。";
+  revisions.sort((a, b) => `${a.character_id || "~"}:${a.lifecycle}:${a.name}`
+    .localeCompare(`${b.character_id || "~"}:${b.lifecycle}:${b.name}`, "zh-CN"));
+  for (const revision of revisions) {
+    const row = document.createElement("article");
+    row.className = "plan-row";
+    const head = document.createElement("div");
+    head.className = "model-card-head";
+    const name = document.createElement("strong");
+    name.textContent = revision.name;
+    const badge = document.createElement("span");
+    badge.className = `model-badge ${revision.lifecycle}`;
+    badge.textContent = lifecycleNames[revision.lifecycle] || revision.lifecycle;
+    head.append(name, badge);
+    const details = document.createElement("p");
+    details.className = "muted";
+    details.textContent = revision.character_id
+      ? `${voiceCatalog.get(revision.character_id)?.name || revision.character_id} · ${revision.model_id || "未命名"} · ${revision.availability}`
+      : `尚未指定角色 · ${revision.availability}`;
+    row.append(head, details);
+    if (revision.lifecycle === "candidate" && !revision.character_id) {
+      const controls = document.createElement("div"); controls.className = "controls";
+      const select = document.createElement("select"); select.setAttribute("aria-label", "选择模型所属角色");
+      for (const voice of voiceCatalog.values()) {
+        const option = document.createElement("option"); option.value = voice.id;
+        option.textContent = voice.name || voice.id; select.append(option);
+      }
+      controls.append(select, actionButton("登记到这个角色", () => assignRevision(revision, select)));
+      row.append(controls);
+    } else if (revision.lifecycle === "candidate") {
+      const baseline = modelRegistry.defaults?.[revision.scope];
+      const create = actionButton("建立 A/B 评估", () => createEvaluation(revision), "button-accent");
+      create.disabled = !baseline;
+      row.append(create);
+    }
+    ui.modelRows.append(row);
+  }
+}
+
+async function startEvaluation(evaluationId) {
+  try {
+    await libraryFetch(`/v1/evaluations/${evaluationId}/run`, { method: "POST" });
+    ui.modelStatus.textContent = "评估音频已排队。它会逐项保存，可取消后继续。";
+    await loadModelManagement(false);
+  } catch (error) { ui.modelStatus.textContent = `无法开始评估：${error.message}`; }
+}
+
+async function cancelEvaluation(evaluationId) {
+  try {
+    await libraryFetch(`/v1/evaluations/${evaluationId}/cancel`, { method: "POST" });
+    ui.modelStatus.textContent = "已请求在当前音频完成后取消。";
+  } catch (error) { ui.modelStatus.textContent = `无法取消：${error.message}`; }
+}
+
+async function decideEvaluation(evaluationId, decision) {
+  const reasons = { promote: "A/B 试听确认候选版本更适合作为默认模型",
+    keep_default: "A/B 试听确认保留当前默认模型", inconclusive: "A/B 试听结果暂不足以更换默认模型" };
+  try {
+    await libraryFetch(`/v1/evaluations/${evaluationId}/decision`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, reason: reasons[decision] })
+    });
+    ui.modelStatus.textContent = "评估结论已保存。";
+    await loadModelManagement(false); await showEvaluation(evaluationId);
+  } catch (error) { ui.modelStatus.textContent = `无法保存结论：${error.message}`; }
+}
+
+async function promoteEvaluation(evaluation) {
+  try {
+    await libraryFetch(`/v1/model-registry/${evaluation.candidate_revision_id}/promote`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "网页 A/B 评估通过", evaluation_id: evaluation.evaluation_id })
+    });
+    ui.modelStatus.textContent = "候选版本已成为该角色的默认模型；之后生成的音频会记录新 revision。";
+    await loadVoices(); await loadModelManagement(false);
+  } catch (error) { ui.modelStatus.textContent = `无法设为默认：${error.message}`; }
+}
+
+async function submitPairReview(evaluationId, pairId, preference, rating) {
+  try {
+    await libraryFetch(`/v1/evaluations/${evaluationId}/reviews`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blind_pair_id: pairId, preference,
+        ratings: { naturalness: Number(rating) }, notes: "网页盲听" })
+    });
+    await showEvaluation(evaluationId);
+  } catch (error) { ui.modelStatus.textContent = `评价保存失败：${error.message}`; }
+}
+
+async function showEvaluation(evaluationId) {
+  try {
+    const evaluation = await (await libraryFetch(`/v1/evaluations/${evaluationId}`)).json();
+    const review = await (await libraryFetch(`/v1/evaluations/${evaluationId}/review`)).json();
+    ui.evaluationReview.replaceChildren();
+    const title = document.createElement("h3");
+    const successes = evaluation.results.filter(item => item.status === "success").length;
+    const expected = evaluation.sample_set.samples.length * (evaluation.baseline_revision_id ? 2 : 1);
+    title.textContent = `评估详情 · ${evaluationNames[evaluation.status] || evaluation.status} · ${successes}/${expected} 份音频`;
+    ui.evaluationReview.append(title);
+    for (const pair of review.pairs) {
+      const row = document.createElement("article"); row.className = "evaluation-pair";
+      const text = document.createElement("p"); text.textContent = `${pair.category || "样本"} · ${pair.text}`;
+      const audios = document.createElement("div"); audios.className = "evaluation-audio-grid";
+      for (const side of ["a", "b"]) {
+        const box = document.createElement("div");
+        const label = document.createElement("strong"); label.textContent = side.toUpperCase();
+        const audio = document.createElement("audio"); audio.controls = true; audio.preload = "none";
+        audio.src = pair[`${side}_audio_url`]; box.append(label, audio); audios.append(box);
+      }
+      const controls = document.createElement("div"); controls.className = "controls";
+      const rating = document.createElement("select"); rating.setAttribute("aria-label", "自然度评分");
+      for (let score = 5; score >= 1; score--) {
+        const option = document.createElement("option"); option.value = score; option.textContent = `自然度 ${score}/5`; rating.append(option);
+      }
+      controls.append(rating,
+        actionButton("A 更好", () => submitPairReview(evaluationId, pair.blind_pair_id, "a", rating.value)),
+        actionButton("B 更好", () => submitPairReview(evaluationId, pair.blind_pair_id, "b", rating.value)),
+        actionButton("相近", () => submitPairReview(evaluationId, pair.blind_pair_id, "similar", rating.value)));
+      if (pair.review) { const saved = document.createElement("span"); saved.className = "muted"; saved.textContent = "此样本已评价"; controls.append(saved); }
+      row.append(text, audios, controls); ui.evaluationReview.append(row);
+    }
+    if (evaluation.status === "completed") {
+      const decisions = document.createElement("div"); decisions.className = "library-actions";
+      decisions.append(actionButton("候选更好", () => decideEvaluation(evaluationId, "promote"), "button-accent"),
+        actionButton("保留当前默认", () => decideEvaluation(evaluationId, "keep_default")),
+        actionButton("暂不确定", () => decideEvaluation(evaluationId, "inconclusive")));
+      if (evaluation.decision.value === "promote") decisions.append(
+        actionButton("将候选设为默认模型", () => promoteEvaluation(evaluation), "button-primary"));
+      ui.evaluationReview.append(decisions);
+    }
+  } catch (error) { ui.modelStatus.textContent = `评估详情读取失败：${error.message}`; }
+}
+
+function renderEvaluations(evaluations) {
+  ui.evaluationRows.replaceChildren();
+  if (!evaluations.length) ui.evaluationRows.textContent = "暂无评估。请在候选模型下建立 A/B 评估。";
+  for (const evaluation of evaluations) {
+    const row = document.createElement("article"); row.className = "plan-row";
+    const title = document.createElement("strong");
+    title.textContent = `${voiceCatalog.get(evaluation.character_id)?.name || evaluation.character_id} · ${evaluationNames[evaluation.status] || evaluation.status}`;
+    const decision = document.createElement("p"); decision.className = "muted";
+    decision.textContent = `结论：${evaluation.decision?.value === "pending" ? "尚未决定" : evaluation.decision?.value}`;
+    const controls = document.createElement("div"); controls.className = "controls";
+    controls.append(actionButton("查看 / 盲听", () => showEvaluation(evaluation.evaluation_id)));
+    if (["draft", "cancelled", "failed"].includes(evaluation.status)) controls.append(
+      actionButton("开始 / 继续生成评估音频", () => startEvaluation(evaluation.evaluation_id), "button-accent"));
+    if (evaluation.status === "running") controls.append(
+      actionButton("取消评估生成", () => cancelEvaluation(evaluation.evaluation_id), "button-danger"));
+    row.append(title, decision, controls); ui.evaluationRows.append(row);
+  }
+}
+
+async function loadModelManagement(showStatus = true) {
+  clearTimeout(evaluationTimer);
+  try {
+    const [registryResponse, evaluationsResponse] = await Promise.all([
+      libraryFetch("/v1/model-registry"), libraryFetch("/v1/evaluations")]);
+    modelRegistry = await registryResponse.json();
+    const { evaluations } = await evaluationsResponse.json();
+    renderModelRegistry(); renderEvaluations(evaluations);
+    if (showStatus) ui.modelStatus.textContent = `已读取 ${Object.keys(modelRegistry.revisions || {}).length} 个模型版本和 ${evaluations.length} 条评估。`;
+    if (evaluations.some(item => item.status === "running") && ui.modelPanel.open && document.visibilityState !== "hidden") {
+      evaluationTimer = setTimeout(() => loadModelManagement(false), 3000);
+    }
+  } catch (error) { ui.modelStatus.textContent = `模型管理读取失败：${error.message}`; }
+}
+
+ui.refreshModels.addEventListener("click", () => loadModelManagement());
+ui.scanModels.addEventListener("click", () => scanModelRoots(false));
+ui.registerModels.addEventListener("click", () => scanModelRoots(true));
+ui.modelPanel.addEventListener("toggle", () => {
+  if (ui.modelPanel.open) loadModelManagement(); else clearTimeout(evaluationTimer);
+});
+
 async function pollJob() {
   if (!currentBookId) return;
   const bookId = currentBookId;
@@ -1926,5 +2177,5 @@ try {
 loadVoices();
 renderOfflineBooks();
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/service-worker.js?v=11").catch(() => {});
+  navigator.serviceWorker.register("/service-worker.js?v=12").catch(() => {});
 }

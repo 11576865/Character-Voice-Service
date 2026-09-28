@@ -27,6 +27,84 @@ class EvaluationStore:
             raise ValueError("Invalid evaluation ID")
         return self.root / f"{evaluation_id}.json"
 
+    def _audio_dir(self, evaluation_id: str) -> Path:
+        self._path(evaluation_id)
+        return self.root / evaluation_id / "audio"
+
+    def write_audio(self, evaluation_id: str, audio: bytes) -> tuple[str, str]:
+        digest = hashlib.sha256(audio).hexdigest()
+        artifact_id = "audio-" + digest[:24]
+        directory = self._audio_dir(evaluation_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{artifact_id}.wav"
+        temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+        temporary.write_bytes(audio)
+        temporary.replace(path)
+        return artifact_id, digest
+
+    def audio_path(self, evaluation_id: str, artifact_id: str) -> Path:
+        if not re.fullmatch(r"audio-[0-9a-f]{24}", str(artifact_id)):
+            raise ValueError("Invalid evaluation audio artifact ID")
+        record = self.get(evaluation_id)
+        result = next((item for item in record["results"]
+                       if item.get("status") == "success" and
+                       item.get("audio_artifact_id") == artifact_id), None)
+        if not result:
+            raise FileNotFoundError(artifact_id)
+        path = self._audio_dir(evaluation_id) / f"{artifact_id}.wav"
+        if not path.is_file():
+            raise FileNotFoundError(artifact_id)
+        return path
+
+    def audio_is_valid(self, evaluation_id: str, result: dict) -> bool:
+        try:
+            path = self.audio_path(evaluation_id, result.get("audio_artifact_id", ""))
+            return hashlib.sha256(path.read_bytes()).hexdigest() == result.get("audio_sha256")
+        except (ValueError, FileNotFoundError, OSError):
+            return False
+
+    @staticmethod
+    def _pair_mapping(record: dict, sample_id: str) -> dict[str, str]:
+        sample_ids = {item["sample_id"] for item in record["sample_set"]["samples"]}
+        if sample_id not in sample_ids or not record.get("baseline_revision_id"):
+            raise ValueError("Invalid A/B sample")
+        revisions = [record["candidate_revision_id"], record["baseline_revision_id"]]
+        if hashlib.sha256(f'{record["evaluation_id"]}:{sample_id}'.encode()).digest()[0] & 1:
+            revisions.reverse()
+        return {"a": revisions[0], "b": revisions[1]}
+
+    def review_pairs(self, evaluation_id: str) -> dict:
+        record = self.get(evaluation_id)
+        pairs = []
+        for sample in record["sample_set"]["samples"]:
+            mapping = self._pair_mapping(record, sample["sample_id"])
+            by_revision = {item["model_revision_id"]: item for item in record["results"]
+                           if item["sample_id"] == sample["sample_id"] and item["status"] == "success"}
+            if not all(revision in by_revision for revision in mapping.values()):
+                continue
+            latest = next((item for item in reversed(record["human_reviews"])
+                           if item["blind_pair_id"] == sample["sample_id"]), None)
+            public_review = None if latest is None else {key: latest.get(key) for key in
+                ("review_id", "created_at", "preference", "ratings", "notes")}
+            pairs.append({"blind_pair_id": sample["sample_id"], "text": sample["text"],
+                          "category": sample.get("category", ""),
+                          "a_audio_url": f'/v1/evaluations/{evaluation_id}/review/{sample["sample_id"]}/a',
+                          "b_audio_url": f'/v1/evaluations/{evaluation_id}/review/{sample["sample_id"]}/b',
+                          "review": public_review})
+        return {"evaluation_id": evaluation_id, "status": record["status"], "pairs": pairs,
+                "decision": record["decision"]}
+
+    def review_audio_path(self, evaluation_id: str, sample_id: str, side: str) -> Path:
+        record = self.get(evaluation_id)
+        if side not in {"a", "b"}:
+            raise ValueError("Invalid A/B side")
+        revision_id = self._pair_mapping(record, sample_id)[side]
+        result = next((item for item in record["results"] if item["sample_id"] == sample_id and
+                       item["model_revision_id"] == revision_id and item["status"] == "success"), None)
+        if not result:
+            raise FileNotFoundError(sample_id)
+        return self.audio_path(evaluation_id, result["audio_artifact_id"])
+
     def create(self, *, character_id: str, candidate_revision_id: str,
                baseline_revision_id: str | None, sample_set: dict,
                engine: dict, reference_set_id: str = "", requested_parameters: dict | None = None) -> dict:
@@ -95,6 +173,8 @@ class EvaluationStore:
                 record["status"] = status
                 if status == "running" and not record.get("started_at"):
                     record["started_at"] = now_iso()
+                if status == "running":
+                    record.pop("finished_at", None)
                 if status in {"completed", "cancelled", "failed"}:
                     record["finished_at"] = now_iso()
             if effective_parameters is not None:
@@ -122,10 +202,18 @@ class EvaluationStore:
             raise ValueError("Ratings must use supported fields and values 1-5 or null")
         with self.lock:
             record = self.get(evaluation_id)
-            record["human_reviews"].append({"review_id": "review-" + uuid.uuid4().hex,
-                                             "created_at": now_iso(), "blind_pair_id": blind_pair_id,
-                                             "preference": preference, "ratings": deepcopy(ratings),
-                                             "notes": str(notes)})
+            review = {"review_id": "review-" + uuid.uuid4().hex,
+                      "created_at": now_iso(), "blind_pair_id": blind_pair_id,
+                      "preference": preference, "ratings": deepcopy(ratings),
+                      "notes": str(notes)}
+            # Older clients used arbitrary pair IDs. Keep those records valid;
+            # reviews created from the v1 blind endpoint also retain the hidden mapping.
+            try:
+                mapping = self._pair_mapping(record, blind_pair_id)
+                review.update(a_revision_id=mapping["a"], b_revision_id=mapping["b"])
+            except ValueError:
+                pass
+            record["human_reviews"].append(review)
             record["updated_at"] = now_iso()
             self.validate(record)
             atomic_json(self._path(evaluation_id), record)

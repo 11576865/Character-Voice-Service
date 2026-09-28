@@ -54,6 +54,7 @@ def _normalize_model(model_id: str, raw: object) -> dict:
         "name": str(raw.get("name") or model_id).strip() or model_id,
         "engine": engine,
         "version": str(raw.get("version") or "").strip(),
+        "revision_id": str(raw.get("revision_id") or "").strip() or None,
         "gpt_weights": gpt_weights or None,
         "sovits_weights": sovits_weights or None,
         "managed": bool(gpt_weights and sovits_weights),

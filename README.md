@@ -281,7 +281,7 @@ Python 测试：
 
 ## 接下来的主线
 
-模型升级基础设施的完整设计见 [实施报告 TXT](docs/CVS_Model_Management_Implementation_Report.txt)。[Model Root 与 Registry 操作说明](docs/model-scanner.md)覆盖只读盘点、训练导出 manifest、候选登记、`candidate/default/retired` 生命周期以及 Evaluation v1。管理数据保存在本机 `data/model-management`，实际模型与评估音频不进入 Git。
+模型升级基础设施的完整设计见 [实施报告 TXT](docs/CVS_Model_Management_Implementation_Report.txt)。[Model Root、Registry 与 A/B 评估操作说明](docs/model-scanner.md)覆盖只读盘点、训练导出 manifest、候选登记、`candidate/default/retired` 生命周期、可恢复的 Evaluation 音频生成和网页盲听。管理数据保存在本机 `data/model-management`，实际模型与评估音频不进入 Git。创建 Evaluation 不会启动推理；必须在登录后的网页中明确点击“开始 / 继续生成评估音频”。
 
 当前工作分成两条并行线：
 

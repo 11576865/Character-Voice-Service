@@ -23,6 +23,7 @@ from server.book_library import BookLibrary
 from server.emotion_router import choose_reference, emotion_cues
 from server.epub_export import export_read_aloud
 from server.document_import import parse_document
+from server.evaluation_runner import EvaluationRunner
 from server.model_management import ModelManager
 from server.speaker_suggestions import suggest_speakers
 from server.pronunciations import spoken_text
@@ -57,8 +58,11 @@ if FOLIATE_DIR.is_dir():
 library = BookLibrary(DATA_DIR)
 model_manager = ModelManager(DATA_DIR / "model-management", VOICE_DIR)
 generation_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cvs-book")
+evaluation_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cvs-evaluation")
 active_jobs: dict[str, threading.Event] = {}
+active_evaluations: dict[str, threading.Event] = {}
 jobs_lock = threading.Lock()
+evaluation_runner = EvaluationRunner(model_manager, synthesize)
 
 
 class SpeechRequest(BaseModel):
@@ -443,7 +447,7 @@ def assign_model_revision(revision_id: str, request: ModelAssignmentRequest):
 @app.post("/v1/model-registry/{revision_id}/promote", dependencies=[Depends(require_admin)])
 def promote_model_revision(revision_id: str, request: ModelTransitionRequest):
     with jobs_lock:
-        if active_jobs:
+        if active_jobs or active_evaluations:
             raise HTTPException(status_code=409, detail="Wait for active or queued generation tasks to finish")
     try:
         return model_manager.promote(revision_id, reason=request.reason,
@@ -466,10 +470,46 @@ def list_evaluations():
     return {"evaluations": model_manager.evaluations.list()}
 
 
+@app.get("/v1/evaluation-sample-sets/default", dependencies=[Depends(require_admin)])
+def get_default_evaluation_sample_set():
+    path = PROJECT_ROOT / "config" / "evaluation-samples-v1.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return model_management_error(exc)
+
+
 @app.get("/v1/evaluations/{evaluation_id}", dependencies=[Depends(require_admin)])
 def get_evaluation(evaluation_id: str):
     try:
         return model_manager.evaluations.get(evaluation_id)
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.get("/v1/evaluations/{evaluation_id}/audio/{artifact_id}", dependencies=[Depends(require_admin)])
+def get_evaluation_audio(evaluation_id: str, artifact_id: str):
+    try:
+        return FileResponse(model_manager.evaluations.audio_path(evaluation_id, artifact_id),
+                            media_type="audio/wav")
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.get("/v1/evaluations/{evaluation_id}/review", dependencies=[Depends(require_admin)])
+def get_evaluation_review(evaluation_id: str):
+    try:
+        return model_manager.evaluations.review_pairs(evaluation_id)
+    except Exception as exc:
+        return model_management_error(exc)
+
+
+@app.get("/v1/evaluations/{evaluation_id}/review/{sample_id}/{side}",
+         dependencies=[Depends(require_admin)])
+def get_evaluation_review_audio(evaluation_id: str, sample_id: str, side: str):
+    try:
+        return FileResponse(model_manager.evaluations.review_audio_path(
+            evaluation_id, sample_id, side), media_type="audio/wav")
     except Exception as exc:
         return model_management_error(exc)
 
@@ -484,6 +524,53 @@ def create_evaluation(request: EvaluationCreateRequest):
             requested_parameters=request.requested_parameters)
     except Exception as exc:
         return model_management_error(exc)
+
+
+def _run_evaluation(evaluation_id: str, cancel: threading.Event) -> None:
+    try:
+        evaluation_runner.run(evaluation_id, cancel)
+    except Exception:
+        # Failure details remain in the authenticated Evaluation record.
+        pass
+    finally:
+        with jobs_lock:
+            active_evaluations.pop(evaluation_id, None)
+
+
+@app.post("/v1/evaluations/{evaluation_id}/run", dependencies=[Depends(require_admin)])
+def run_evaluation(evaluation_id: str):
+    try:
+        record = model_manager.evaluations.get(evaluation_id)
+    except Exception as exc:
+        return model_management_error(exc)
+    if not record.get("baseline_revision_id"):
+        raise HTTPException(status_code=400, detail="Automatic A/B generation requires a baseline revision")
+    if record["status"] == "completed":
+        raise HTTPException(status_code=409, detail="Evaluation is already complete")
+    with jobs_lock:
+        if active_jobs:
+            raise HTTPException(status_code=409, detail="Wait for book generation to finish")
+        if evaluation_id in active_evaluations:
+            raise HTTPException(status_code=409, detail="Evaluation generation already running")
+        if active_evaluations:
+            raise HTTPException(status_code=409, detail="Wait for the active Evaluation to finish")
+        cancel = threading.Event()
+        active_evaluations[evaluation_id] = cancel
+    evaluation_pool.submit(_run_evaluation, evaluation_id, cancel)
+    return {"status": "queued", "evaluation_id": evaluation_id}
+
+
+@app.post("/v1/evaluations/{evaluation_id}/cancel", dependencies=[Depends(require_admin)])
+def cancel_evaluation(evaluation_id: str):
+    try:
+        model_manager.evaluations.get(evaluation_id)
+    except Exception as exc:
+        return model_management_error(exc)
+    with jobs_lock:
+        cancel = active_evaluations.get(evaluation_id)
+    if cancel:
+        cancel.set()
+    return {"cancelling": bool(cancel)}
 
 
 @app.put("/v1/evaluations/{evaluation_id}", dependencies=[Depends(require_admin)])
@@ -938,6 +1025,8 @@ def generate_book(book_id: str, request: GenerationRequest):
         raise HTTPException(status_code=400, detail="Speed must be positive")
     load_voice_profile(request.voice)
     with jobs_lock:
+        if active_evaluations:
+            raise HTTPException(status_code=409, detail="请先等待或取消模型评估任务。")
         if book_id in active_jobs:
             raise HTTPException(status_code=409, detail="Book generation already running")
         settings = request.model_dump()

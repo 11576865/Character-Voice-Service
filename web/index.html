@@ -264,6 +264,21 @@
       <p id="tasksStatus" role="status"></p>
       <div id="taskRows" class="plan-rows"></div>
     </details>
+    <details id="modelPanel" class="model-panel">
+      <summary>模型版本与 A/B 评估</summary>
+      <p class="muted">扫描只检查模型目录；“完整扫描并登记”会计算文件校验值，可能需要较长时间。评估只有点击“开始生成评估音频”后才会调用语音模型，并使用同一角色、同一参考语音和同一参数比较候选版与当前默认版。</p>
+      <div class="library-actions">
+        <button id="refreshModels" type="button">刷新模型与评估</button>
+        <button id="scanModels" type="button">快速扫描模型目录</button>
+        <button id="registerModels" type="button">完整扫描并登记新模型</button>
+      </div>
+      <p id="modelStatus" class="inline-status" role="status" aria-live="polite"></p>
+      <div class="model-evaluation-grid">
+        <section><h3>模型版本</h3><div id="modelRows" class="plan-rows"></div></section>
+        <section><h3>评估记录</h3><div id="evaluationRows" class="plan-rows"></div></section>
+      </div>
+      <div id="evaluationReview" class="evaluation-review" aria-live="polite"></div>
+    </details>
     <div id="jobStatus" role="status"></div>
     <div id="productionStatus" role="status" aria-live="polite"></div>
     <p class="muted">本次任务完成不一定代表全书完成。下载到本设备：供本浏览器离线听读；同步 EPUB：文字与音频打包，需兼容的有声 EPUB 阅读器；WAV：整篇连续音频，可用普通播放器收听。修改后需重新下载离线副本或导出文件。</p>
@@ -298,6 +313,6 @@
     <audio id="audio" hidden></audio>
   </div>
 
-  <script type="module" src="/reader-assets/js/reader.js?v=19"></script>
+  <script type="module" src="/reader-assets/js/reader.js?v=20"></script>
 </body>
 </html>

@@ -34,6 +34,7 @@ def registry_profile():
                 "name": "Self 400",
                 "engine": "gpt-sovits",
                 "version": "v2pro",
+                "revision_id": "gpt-sovits-abc123",
                 "gpt_weights": "D:/models/march.ckpt",
                 "sovits_weights": "D:/models/march.pth",
                 "parameters": {"temperature": 0.8},
@@ -120,6 +121,7 @@ def test_registry_profile_selects_model_and_reference(tmp_path):
     assert selection["reference_audio"] == "D:/refs/surprised.wav"
     assert selection["selected_reference"]["emotion"] == "surprised"
     assert selection["parameters"]["temperature"] == 1.0
+    assert profile["models"]["self-400-v2pro"]["revision_id"] == "gpt-sovits-abc123"
 
 
 def test_model_parameters_override_character_defaults(tmp_path):

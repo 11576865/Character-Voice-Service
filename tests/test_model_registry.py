@@ -34,9 +34,14 @@ def test_scan_import_bootstraps_default_and_new_content_becomes_candidate(tmp_pa
     manager, root, voices, gpt, sovits = setup_manager(tmp_path)
     first = manager.scan(full_hash=True, register=True)["registration"]
     old_id = first["added"][0]
+    assert first["profile_links_updated"] == 1
+    linked = json.loads((voices / "role.json").read_text(encoding="utf-8"))
+    assert linked["models"]["trained"]["revision_id"] == old_id
     assert first["registry"]["revisions"][old_id]["lifecycle"] == "default"
     assert first["registry"]["defaults"] == {"role:en": old_id}
-    assert manager.scan(full_hash=True, register=True)["registration"]["existing"] == [old_id]
+    repeated = manager.scan(full_hash=True, register=True)["registration"]
+    assert repeated["existing"] == [old_id]
+    assert repeated["profile_links_updated"] == 0
     gpt.write_bytes(b"gpt-next")
     second = manager.scan(full_hash=True, register=True)["registration"]
     new_id = second["added"][0]

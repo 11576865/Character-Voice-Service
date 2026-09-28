@@ -1,6 +1,6 @@
 # 本机模型扫描（E1）
 
-完整方案见 [实施报告 TXT](CVS_Model_Management_Implementation_Report.txt)。这是只读盘点工具，尚不登记候选、不提升默认、不加载模型。
+完整方案见 [实施报告 TXT](CVS_Model_Management_Implementation_Report.txt)。快速扫描只做盘点；完整扫描可以按内容 revision 登记候选。扫描和登记都不会加载模型，只有用户明确开始 Evaluation 或普通语音生成时才调用推理后端。
 
 把 `config/model_roots.example.json` 复制到本机 `data/model-management/roots.json`，将 `path` 改为 GPT-SoVITS 安装根目录的绝对路径。该目录内应有 `GPT_weights_*` 和 `SoVITS_weights_*` 子目录。实际配置和扫描结果留在 Git 忽略的 `data` 中。
 
@@ -55,3 +55,17 @@
 没有 Evaluation 时只有显式增加 `--manual-override` 才能提升。提升会核对权重 SHA-256，将角色配置加入 revision 专属模型项并切换默认；原默认进入 `retired`。Registry 中的绝对根目录由本机 `roots.json` 提供，不写入可提交文件。
 
 Evaluation v1 的正式字段见 `config/evaluation-v1.schema.json`，固定原创英文样本见 `config/evaluation-samples-v1.json`。记录支持草稿、运行、完成、取消和失败状态，逐样本保存候选/基线结果，人工评分与最终决策分开。所有样本与所有对照 revision 都有终态结果后，才能标为 completed；只有决策为 promote 的对应 Evaluation 才可用于正常提升。
+
+## 网页 A/B 评估
+
+登录网页书库后，展开“模型版本与 A/B 评估”：
+
+1. “快速扫描模型目录”只显示发现情况；“完整扫描并登记新模型”计算 SHA-256，并把新内容登记为 `candidate`。
+2. 带导出 manifest 的模型会自动关联角色；未声明角色的候选可在网页中人工指定一次。
+3. 在已关联角色的候选版上点“建立 A/B 评估”。此时只创建记录，不生成音频。
+4. 点“开始 / 继续生成评估音频”后，服务才逐条调用 GPT-SoVITS。任务可取消，已成功且校验仍正确的 WAV 会在继续时复用。
+5. 完成后分别试听 A/B。网页不显示两侧 revision；服务端在评价记录中保存真实映射。选择最终结论后，只有“候选更好”会出现单独的“设为默认模型”操作。
+
+评估 WAV 保存在 `data/model-management/evaluations/<evaluation-id>/audio/`。每个结果记录实际模型 revision、参考语音 ID、有效参数、音频 SHA-256、生成耗时、音频时长和实时系数。评估生成与整书生成互斥，避免两类长任务争用同一个 GPT-SoVITS 进程。
+
+完整登记也会给已经在用的默认模型回填 `revision_id`。Reader 的音频指纹包含这一字段，因此默认模型换代后，旧段落会被准确标为需要更新，而不会误当成仍与当前模型一致。
