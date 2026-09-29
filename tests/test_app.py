@@ -249,11 +249,55 @@ def test_example_template_cannot_be_used_as_a_voice():
 
 
 def test_health_reports_backend_offline(monkeypatch):
-    def fail(*args, **kwargs):
-        raise OSError("offline")
-
-    monkeypatch.setattr(app_module.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(
+        app_module,
+        "engine_summaries",
+        lambda: [
+            {"id": "gpt-sovits", "name": "GPT-SoVITS", "status": "offline", "capabilities": {}},
+            {"id": "index-tts", "name": "IndexTTS 2.5", "status": "ready", "capabilities": {}},
+        ],
+    )
     response = client.get("/health")
 
     assert response.status_code == 200
     assert response.json()["backend_status"] == "offline"
+    assert response.json()["ready_engines"] == ["index-tts"]
+
+
+def test_speech_routes_to_selected_model_engine(tmp_path, monkeypatch):
+    raw = write_registry_profile(tmp_path)
+    raw["models"]["index-zero-shot"] = {
+        "name": "IndexTTS 2.5 zero-shot",
+        "engine": "index-tts",
+        "version": "2.5",
+        "parameters": {"use_emo_text": True, "emo_alpha": 0.5},
+    }
+    (tmp_path / "march-7th.json").write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "SAVE_GENERATED_WAV", False)
+
+    calls = []
+    monkeypatch.setattr(
+        app_module,
+        "synthesize",
+        lambda **kwargs: calls.append(kwargs) or b"RIFF....WAVE",
+    )
+
+    response = client.post("/v1/audio/speech", json={
+        "voice": "march-7th",
+        "model_id": "index-zero-shot",
+        "reference_id": "neutral",
+        "input": "Hello from IndexTTS.",
+    })
+
+    assert response.status_code == 200
+    assert response.headers["x-selected-engine"] == "index-tts"
+    assert calls[0]["profile"]["selected_model"]["engine"] == "index-tts"
+
+    mismatch = client.post("/v1/audio/speech", json={
+        "model": "gpt-sovits",
+        "voice": "march-7th",
+        "model_id": "index-zero-shot",
+        "input": "Wrong engine.",
+    })
+    assert mismatch.status_code == 409
