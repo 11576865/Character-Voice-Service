@@ -3,32 +3,9 @@ __pycache__/
 .venv/
 venv/
 .env
-.pytest-tmp/
 .pytest_cache/
-test-results/
-
-# Generated audio / cache
-output/
-cache/
 data/
 *.wav
-*.flac
 *.mp3
-
-# Local voice assets and private configs
-references/*
-!references/.gitkeep
-voices/*.json
-!voices/example.json
-voices/*.bak
-
-# Model weights
-*.pth
-*.ckpt
-*.onnx
-
-# IDE / OS
-.vscode/
-.idea/
 .DS_Store
 Thumbs.db

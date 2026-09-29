@@ -1,4 +1,4 @@
-name: CVS tests
+name: Reader tests
 
 on:
   push:

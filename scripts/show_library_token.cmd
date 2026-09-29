@@ -1,13 +1,13 @@
 @echo off
 setlocal
 set "PROJECT_ROOT=%~dp0.."
-set "VENV_PYTHON=%PROJECT_ROOT%\.venv\Scripts\python.exe"
-if not exist "%VENV_PYTHON%" (
-  echo Project environment missing. Run first_setup.cmd first.
+set "TOKEN_FILE=%PROJECT_ROOT%\data\admin-token.txt"
+if not exist "%TOKEN_FILE%" (
+  echo Reader token has not been created yet. Start Character Voice Reader once first.
   pause
   exit /b 1
 )
-pushd "%PROJECT_ROOT%"
-"%VENV_PYTHON%" -c "from server.config import ADMIN_TOKEN; print('Library token:', ADMIN_TOKEN)"
-popd
+type "%TOKEN_FILE%"
+echo.
 pause
+endlocal

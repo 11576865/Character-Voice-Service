@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from server.book_library import BookLibrary
+from reader_server.book_library import BookLibrary
 
 
 def _duration(wav: Path) -> float:

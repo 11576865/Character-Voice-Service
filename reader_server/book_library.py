@@ -7,7 +7,7 @@ import subprocess
 import threading
 import uuid
 import wave
-from server.pronunciations import validate_rules
+from reader_server.pronunciations import validate_rules
 from datetime import datetime, timezone
 from pathlib import Path
 
