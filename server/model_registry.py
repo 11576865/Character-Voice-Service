@@ -229,6 +229,17 @@ def scan_model_root(
     now = _now_iso()
     for model_id, item in discovered.items():
         existing = registry["models"].get(model_id)
+        if existing and existing.get("manifest_sha256") not in {None, item["manifest_sha256"]}:
+            existing["status"] = "quarantined"
+            existing["present"] = True
+            existing["updated_at"] = now
+            existing["integrity_error"] = "immutable manifest changed after registration"
+            invalid.append({
+                "manifest": item["manifest"],
+                "error": f"immutable manifest changed after registration: {model_id}",
+            })
+            continue
+
         if existing:
             status = existing.get("status", item["initial_status"])
             if status not in LIFECYCLE_STATES:
@@ -336,6 +347,17 @@ def list_models(
                 item["error"] = str(exc)
         items.append(item)
     return items
+
+
+def default_model_id(
+    voice_id: str,
+    *,
+    registry_path: Path = REGISTRY_PATH,
+) -> str | None:
+    voice_id = _require_id(voice_id, "voice_id")
+    registry = load_registry(registry_path)
+    model_id = registry.get("defaults", {}).get(voice_id)
+    return str(model_id) if model_id else None
 
 
 def set_status(
