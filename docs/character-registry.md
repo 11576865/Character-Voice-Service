@@ -25,7 +25,7 @@ A real profile keeps the stable character ID in its filename:
 voices/march-7th.json
 ```
 
-A registered model is referenced by stable `model_id`. Local aliases remain useful for Reader UI compatibility:
+A registered model is referenced by stable `model_id`. Local aliases remain useful for client-facing labels and compatibility:
 
 ```json
 {
@@ -224,16 +224,6 @@ character defaults
   < reference overrides
 ```
 
-## Book audio revision
-
-For registered immutable models, book generation fingerprints model identity using:
-
-```text
-model_id + model revision
-```
-
-The revision is the immutable manifest SHA-256. Moving the Model Root therefore does not invalidate already generated book audio; changing the actual model artifact/manifest does.
-
 ## Current boundary
 
 Implemented:
@@ -247,7 +237,6 @@ Implemented:
 - manual default promotion/retirement API;
 - EngineAdapter boundary with GPT-SoVITS implementation;
 - legacy inline GPT-SoVITS compatibility and migration;
-- model revision-aware book audio fingerprints.
 
 Not yet implemented:
 

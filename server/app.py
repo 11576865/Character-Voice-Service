@@ -201,7 +201,7 @@ def speech(request: SpeechRequest):
     request_id = uuid.uuid4().hex
     model_identity = selected_model.get("model_id") or selected_model["id"]
     revision = selected_model.get("revision")
-    serving_revision = hashlib.sha256(
+    generation_revision = hashlib.sha256(
         json.dumps(
             {
                 "voice": request.voice,
@@ -220,7 +220,7 @@ def speech(request: SpeechRequest):
         "X-CVS-Voice": request.voice,
         "X-CVS-Model": str(model_identity),
         "X-CVS-Engine": selected_engine,
-        "X-CVS-Serving-Revision": serving_revision,
+        "X-CVS-Generation-Revision": generation_revision,
         "X-Selected-Reference": selection["selected_reference"]["id"],
         "X-Reference-Reason": selection_reason,
     }
