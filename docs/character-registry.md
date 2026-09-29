@@ -2,7 +2,7 @@
 
 Character Voice Service treats a **character** as a stable identity that can own multiple GPT-SoVITS model versions and multiple reference voices.
 
-The registry is intentionally file-based for the current local-first stage. Model weights and reference WAVs stay wherever they already live on disk; the repository stores only local paths in ignored real profile files.
+The registry is intentionally file-based for the current local-first stage. Reference WAVs stay in the local Reference Library. GPT-SoVITS model locations are now separated into a local Model Registry (`data/model-registry.json`), so character profiles can keep stable model references instead of machine-specific absolute weight paths.
 
 ## Profile v2
 
@@ -26,15 +26,13 @@ Example structure:
       "name": "Self 400 v2Pro",
       "engine": "gpt-sovits",
       "version": "v2pro",
-      "gpt_weights": "D:/Models/March7th/march-e15.ckpt",
-      "sovits_weights": "D:/Models/March7th/march_e8_s96.pth"
+      "model_ref": "march-7th--self-400-v2pro"
     },
     "downloaded-v2pro": {
       "name": "Downloaded v2Pro",
       "engine": "gpt-sovits",
       "version": "v2pro",
-      "gpt_weights": "D:/Models/March7th/downloaded.ckpt",
-      "sovits_weights": "D:/Models/March7th/downloaded.pth"
+      "model_ref": "march-7th--downloaded-v2pro"
     }
   },
 
@@ -76,9 +74,38 @@ Example structure:
 
 IDs are machine-stable. `name` fields are display labels and may change without changing API identity.
 
+## Portable Model Registry
+
+A v2 character model may use a stable `model_ref`:
+
+```json
+{
+  "name": "Local v4",
+  "engine": "gpt-sovits",
+  "version": "v4",
+  "model_ref": "march-7th--local-v4"
+}
+```
+
+The referenced local registry is stored under `data/model-registry.json` and is Git-ignored. It owns the actual `.ckpt/.pth` paths.
+
+When a registered weight path no longer exists, Character Voice Service searches the configured model roots by filename and matching path suffix. A unique match is written back to `data/model-registry.json` automatically. Discovery roots are:
+
+- `CVS_MODEL_ROOTS` (multiple roots separated by the platform path separator);
+- `CVS_GPT_SOVITS_ROOT`;
+- the sibling `GPT-SoVITS` directory next to Character-Voice-Service.
+
+Existing profiles that still contain `gpt_weights` and `sovits_weights` remain compatible. To migrate all local v2 profiles to stable model references, run:
+
+```powershell
+.\scripts\migrate_model_registry.cmd
+```
+
+The migration creates a one-time `.json.pre-model-registry.bak` backup, moves the weight locations into the local registry, and replaces the two absolute paths in each model with `model_ref`.
+
 ## Managed and externally loaded models
 
-A model with both `gpt_weights` and `sovits_weights` is **managed** by Character Voice Service.
+A model is **managed** when it resolves to both GPT and SoVITS weights, either through `model_ref` or through the legacy explicit `gpt_weights` + `sovits_weights` pair.
 
 Before synthesis the service uses GPT-SoVITS' official control endpoints:
 
@@ -94,7 +121,7 @@ Model switching and synthesis share one service-side lock. This is deliberate: G
 
 Legacy profiles remain valid. They normalize to one model named `loaded`, representing whatever model was already loaded in GPT-SoVITS before Character Voice Service started.
 
-There is one safety restriction: after Character Voice Service switches GPT-SoVITS to a managed model, it will not silently route back to an unregistered externally loaded model. The service no longer knows which weights should be restored. Register explicit weight paths or restart both processes before using that legacy/external model again.
+There is one safety restriction: after Character Voice Service switches GPT-SoVITS to a managed model, it will not silently route back to an unregistered externally loaded model. The service no longer knows which weights should be restored. Register the model in the local Model Registry (preferred), keep an explicit weight pair for compatibility, or restart both processes before using that legacy/external model again.
 
 ## Reference selection
 
