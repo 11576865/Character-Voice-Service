@@ -2,6 +2,8 @@ import json
 import re
 from pathlib import Path
 
+from server.model_registry import resolve_registered_model
+
 
 TEMPLATE_FILENAME = "example.json"
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -38,9 +40,20 @@ def _normalize_model(model_id: str, raw: object) -> dict:
     if engine != "gpt-sovits":
         raise ValueError(f"model {model_id}: unsupported engine {engine!r}")
 
+    model_ref = str(raw.get("model_ref") or "").strip() or None
     gpt_weights = str(raw.get("gpt_weights") or "").strip()
     sovits_weights = str(raw.get("sovits_weights") or "").strip()
-    if bool(gpt_weights) != bool(sovits_weights):
+
+    if model_ref and (gpt_weights or sovits_weights):
+        raise ValueError(
+            f"model {model_id}: use model_ref or explicit weight paths, not both"
+        )
+
+    if model_ref:
+        resolved = resolve_registered_model(model_ref)
+        gpt_weights = resolved["gpt_weights"]
+        sovits_weights = resolved["sovits_weights"]
+    elif bool(gpt_weights) != bool(sovits_weights):
         raise ValueError(
             f"model {model_id}: gpt_weights and sovits_weights must be configured together"
         )
@@ -54,6 +67,7 @@ def _normalize_model(model_id: str, raw: object) -> dict:
         "name": str(raw.get("name") or model_id).strip() or model_id,
         "engine": engine,
         "version": str(raw.get("version") or "").strip(),
+        "model_ref": model_ref,
         "gpt_weights": gpt_weights or None,
         "sovits_weights": sovits_weights or None,
         "managed": bool(gpt_weights and sovits_weights),
