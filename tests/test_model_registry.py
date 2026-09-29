@@ -84,3 +84,45 @@ def test_migrate_profile_moves_paths_into_registry(tmp_path, monkeypatch):
 
     resolved = model_registry.resolve_registered_model(model["model_ref"], registry_path=registry)
     assert Path(resolved["gpt_weights"]) == gpt.resolve()
+
+
+def test_voice_profile_model_ref_resolves_to_registry_weights(monkeypatch):
+    from server import voice_profiles
+
+    monkeypatch.setattr(
+        voice_profiles,
+        "resolve_registered_model",
+        lambda model_ref: {
+            "gpt_weights": "D:/portable/gpt.ckpt",
+            "sovits_weights": "D:/portable/sovits.pth",
+        },
+    )
+
+    profile = voice_profiles.normalize_profile({
+        "schema_version": 2,
+        "name": "March 7th",
+        "target_language": "en",
+        "default_model": "local-v4",
+        "models": {
+            "local-v4": {
+                "name": "Local v4",
+                "engine": "gpt-sovits",
+                "version": "v4",
+                "model_ref": "march-7th--local-v4",
+            }
+        },
+        "default_reference": "default",
+        "references": {
+            "default": {
+                "audio": "D:/ref.wav",
+                "text": "Hello.",
+                "language": "en",
+            }
+        },
+    })
+
+    model = profile["models"]["local-v4"]
+    assert model["model_ref"] == "march-7th--local-v4"
+    assert model["managed"] is True
+    assert model["gpt_weights"] == "D:/portable/gpt.ckpt"
+    assert model["sovits_weights"] == "D:/portable/sovits.pth"
