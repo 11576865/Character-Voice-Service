@@ -559,3 +559,68 @@ def import_gpt_sovits_model(
 
     scan_model_root(model_root=model_root, registry_path=registry_path)
     return model_id
+
+
+def migrate_profile(
+    profile_path: Path,
+    *,
+    model_root: Path = MODEL_ROOT,
+    registry_path: Path = REGISTRY_PATH,
+    backup: bool = True,
+) -> dict:
+    raw = json.loads(profile_path.read_text(encoding="utf-8"))
+    models = raw.get("models")
+    if not isinstance(models, dict):
+        return {"profile": str(profile_path), "converted": 0, "unchanged": 0}
+
+    converted = 0
+    unchanged = 0
+    for local_model_id, model in models.items():
+        if not isinstance(model, dict):
+            unchanged += 1
+            continue
+        if model.get("model_id"):
+            unchanged += 1
+            continue
+
+        gpt = str(model.get("gpt_weights") or "").strip()
+        sovits = str(model.get("sovits_weights") or "").strip()
+        if not gpt and not sovits:
+            unchanged += 1
+            continue
+        if not gpt or not sovits:
+            raise ValueError(
+                f"{profile_path.name}:{local_model_id} has only one GPT-SoVITS weight path"
+            )
+
+        global_model_id = import_gpt_sovits_model(
+            voice_id=profile_path.stem,
+            source_model_id=str(local_model_id),
+            name=str(model.get("name") or local_model_id),
+            version=str(model.get("version") or ""),
+            gpt_weights=gpt,
+            sovits_weights=sovits,
+            parameters=dict(model.get("parameters") or {}),
+            language=[str(raw.get("target_language") or "")] if raw.get("target_language") else [],
+            model_root=model_root,
+            registry_path=registry_path,
+        )
+        model["model_id"] = global_model_id
+        model.pop("gpt_weights", None)
+        model.pop("sovits_weights", None)
+        converted += 1
+
+    if converted:
+        if backup:
+            backup_path = profile_path.with_suffix(".json.pre-model-registry.bak")
+            if not backup_path.exists():
+                shutil.copy2(profile_path, backup_path)
+        staging = profile_path.with_suffix(".json.tmp")
+        staging.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        staging.replace(profile_path)
+
+    return {
+        "profile": str(profile_path),
+        "converted": converted,
+        "unchanged": unchanged,
+    }
