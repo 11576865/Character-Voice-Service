@@ -6,7 +6,10 @@ import urllib.request
 
 from fastapi import HTTPException
 
+from server.backends.base import TTSEngine
+
 from server.config import (
+    GPT_SOVITS_HEALTH_URL,
     GPT_SOVITS_SET_GPT_WEIGHTS_URL,
     GPT_SOVITS_SET_SOVITS_WEIGHTS_URL,
     GPT_SOVITS_TTS_URL,
@@ -145,3 +148,30 @@ def _synthesize_locked(text: str, speed: float, profile: dict) -> bytes:
 def synthesize(text: str, speed: float, profile: dict) -> bytes:
     with _backend_lock:
         return _synthesize_locked(text, speed, profile)
+
+
+class GPTSoVITSEngine(TTSEngine):
+    engine_id = "gpt-sovits"
+    display_name = "GPT-SoVITS"
+
+    def health(self) -> dict:
+        try:
+            with urllib.request.urlopen(GPT_SOVITS_HEALTH_URL, timeout=2) as response:
+                response.read()
+            return {"engine": self.engine_id, "status": "ready"}
+        except Exception as exc:
+            return {"engine": self.engine_id, "status": "offline", "detail": str(exc)}
+
+    def capabilities(self) -> dict:
+        return {
+            "speaker_reference": True,
+            "separate_emotion_reference": False,
+            "emotion_text": False,
+            "emotion_vector": False,
+            "duration_control": True,
+            "managed_character_weights": True,
+            "languages": "multilingual",
+        }
+
+    def synthesize(self, text: str, speed: float, profile: dict) -> bytes:
+        return synthesize(text=text, speed=speed, profile=profile)
