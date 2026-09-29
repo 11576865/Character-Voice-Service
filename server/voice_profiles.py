@@ -2,7 +2,7 @@ import json
 import re
 from pathlib import Path
 
-from server.model_registry import resolve_model
+from server.model_registry import default_model_id, resolve_model
 
 
 TEMPLATE_FILENAME = "example.json"
@@ -247,7 +247,9 @@ def normalize_profile(raw: object) -> dict:
 
 def read_valid_profile(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
-        return normalize_profile(json.load(handle))
+        profile = normalize_profile(json.load(handle))
+    profile["_voice_id"] = path.stem
+    return profile
 
 
 def resolve_profile_selection(
@@ -256,7 +258,26 @@ def resolve_profile_selection(
     model_id: str | None = None,
     reference_id: str | None = None,
 ) -> dict:
-    selected_model_id = model_id or profile["default_model"]
+    selected_model_id = model_id
+    if selected_model_id is None:
+        registry_default = None
+        voice_id = profile.get("_voice_id")
+        if voice_id:
+            try:
+                registry_default = default_model_id(str(voice_id))
+            except (OSError, ValueError, json.JSONDecodeError):
+                registry_default = None
+        if registry_default:
+            selected_model_id = next(
+                (
+                    alias
+                    for alias, item in profile["models"].items()
+                    if item.get("model_id") == registry_default
+                ),
+                None,
+            )
+        selected_model_id = selected_model_id or profile["default_model"]
+
     selected_reference_id = reference_id or profile["default_reference"]
 
     if selected_model_id not in profile["models"]:
@@ -284,13 +305,28 @@ def resolve_profile_selection(
 
 
 def public_profile_summary(voice_id: str, profile: dict) -> dict:
+    effective_default = profile["default_model"]
+    try:
+        registry_default = default_model_id(voice_id)
+    except (OSError, ValueError, json.JSONDecodeError):
+        registry_default = None
+    if registry_default:
+        effective_default = next(
+            (
+                alias
+                for alias, item in profile["models"].items()
+                if item.get("model_id") == registry_default
+            ),
+            effective_default,
+        )
+
     return {
         "id": voice_id,
         "name": profile["name"],
         "schema_version": profile["schema_version"],
         "reference_language": profile["references"][profile["default_reference"]]["language"],
         "target_language": profile["target_language"],
-        "default_model": profile["default_model"],
+        "default_model": effective_default,
         "models": [
             {
                 "id": model["id"],
