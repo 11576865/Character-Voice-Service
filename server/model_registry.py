@@ -1,58 +1,79 @@
+import hashlib
 import json
 import os
 import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
-from server.config import PROJECT_ROOT
+from server.config import DATA_DIR, PROJECT_ROOT
 
 
-REGISTRY_PATH = PROJECT_ROOT / "data" / "model-registry.json"
-_SCHEMA_VERSION = 1
-_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+MODEL_ROOT = Path(os.environ.get("CVS_MODEL_ROOT", str(DATA_DIR / "models"))).expanduser()
+REGISTRY_PATH = DATA_DIR / "model-registry.json"
+MANIFEST_FILENAME = "model.json"
+
+SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = "1.0"
+LIFECYCLE_STATES = {
+    "discovered",
+    "candidate",
+    "validated",
+    "default",
+    "retired",
+    "quarantined",
+}
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def _model_roots() -> list[Path]:
-    roots: list[Path] = []
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-    configured = os.environ.get("CVS_MODEL_ROOTS", "")
-    for item in configured.split(os.pathsep):
-        item = item.strip()
-        if item:
-            roots.append(Path(item))
 
-    configured_gpt = os.environ.get("CVS_GPT_SOVITS_ROOT", "").strip()
-    if configured_gpt:
-        roots.append(Path(configured_gpt))
+def _require_id(value: object, field: str) -> str:
+    item = str(value or "").strip()
+    if not _ID_RE.fullmatch(item):
+        raise ValueError(f"{field} must be a stable ID using letters, numbers, '.', '_' or '-'")
+    return item
 
-    # The normal Windows layout used by this project keeps Character-Voice-Service
-    # and GPT-SoVITS next to each other. This is only a discovery root; no profile
-    # stores this absolute location.
-    roots.append(PROJECT_ROOT.parent / "GPT-SoVITS")
 
-    unique: list[Path] = []
-    seen: set[str] = set()
-    for root in roots:
-        key = str(root.expanduser()).casefold()
-        if key not in seen:
-            seen.add(key)
-            unique.append(root.expanduser())
-    return unique
+def _safe_component(value: str) -> str:
+    item = _SAFE_RE.sub("-", value).strip(".-_")
+    return item or "model"
+
+
+def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _empty_registry() -> dict:
-    return {"schema_version": _SCHEMA_VERSION, "models": {}}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "models": {},
+        "defaults": {},
+    }
 
 
 def load_registry(path: Path = REGISTRY_PATH) -> dict:
     if not path.is_file():
         return _empty_registry()
+
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or data.get("schema_version") != _SCHEMA_VERSION:
+    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("unsupported model registry schema")
-    models = data.get("models")
-    if not isinstance(models, dict):
+    if not isinstance(data.get("models"), dict):
         raise ValueError("model registry models must be an object")
+    if not isinstance(data.get("defaults", {}), dict):
+        raise ValueError("model registry defaults must be an object")
+    data.setdefault("defaults", {})
     return data
 
 
@@ -63,155 +84,478 @@ def save_registry(data: dict, path: Path = REGISTRY_PATH) -> None:
     staging.replace(path)
 
 
-def make_model_ref(voice_id: str, model_id: str) -> str:
-    raw = f"{voice_id}--{model_id}"
-    cleaned = _SAFE.sub("-", raw).strip(".-_")
-    if not cleaned:
-        raise ValueError("cannot derive model registry id")
-    return cleaned[:120]
+def _relative_artifact_path(value: object, field: str) -> Path:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError(f"{field} path is required")
+    path = Path(raw)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{field} path must stay inside the immutable model directory")
+    return path
 
 
-def _candidate_score(old: Path, candidate: Path) -> tuple[int, int]:
-    old_parts = [p.casefold() for p in old.parts]
-    new_parts = [p.casefold() for p in candidate.parts]
-    suffix = 0
-    for left, right in zip(reversed(old_parts), reversed(new_parts)):
-        if left != right:
-            break
-        suffix += 1
-    # Prefer the longest matching suffix, then the shorter absolute path.
-    return suffix, -len(candidate.parts)
+def validate_manifest(manifest_path: Path) -> dict:
+    manifest_path = manifest_path.resolve()
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if not isinstance(raw, dict):
+        raise ValueError("model manifest root must be an object")
+    if str(raw.get("schema_version")) != MANIFEST_SCHEMA_VERSION:
+        raise ValueError("unsupported model manifest schema")
+
+    model_id = _require_id(raw.get("model_id"), "model_id")
+    voice_id = _require_id(raw.get("voice_id"), "voice_id")
+
+    engine = raw.get("engine")
+    if not isinstance(engine, dict):
+        raise ValueError("engine must be an object")
+    engine_name = _require_id(engine.get("name"), "engine.name")
+    engine_version = str(engine.get("engine_version") or "").strip()
+    adapter_api_version = str(engine.get("adapter_api_version") or "1").strip()
+
+    artifacts = raw.get("artifacts")
+    if not isinstance(artifacts, dict) or not artifacts:
+        raise ValueError("artifacts must be a non-empty object")
+
+    resolved_artifacts = {}
+    artifact_meta = {}
+    for role, item in artifacts.items():
+        role = _require_id(role, "artifact role")
+        if not isinstance(item, dict):
+            raise ValueError(f"artifact {role} must be an object")
+        relative = _relative_artifact_path(item.get("path"), f"artifact {role}")
+        artifact_path = (manifest_path.parent / relative).resolve()
+        try:
+            artifact_path.relative_to(manifest_path.parent)
+        except ValueError as exc:
+            raise ValueError(f"artifact {role} escapes the model directory") from exc
+        if not artifact_path.is_file():
+            raise ValueError(f"artifact {role} is missing: {relative.as_posix()}")
+
+        expected_hash = str(item.get("sha256") or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+            raise ValueError(f"artifact {role} requires a SHA-256")
+        actual_hash = sha256_file(artifact_path)
+        if actual_hash != expected_hash:
+            raise ValueError(f"artifact {role} SHA-256 mismatch")
+
+        resolved_artifacts[role] = str(artifact_path)
+        artifact_meta[role] = {
+            "path": relative.as_posix(),
+            "sha256": actual_hash,
+        }
+
+    lifecycle = raw.get("lifecycle") or {}
+    if not isinstance(lifecycle, dict):
+        raise ValueError("lifecycle must be an object")
+    initial_status = str(lifecycle.get("status") or "candidate").strip()
+    if initial_status not in LIFECYCLE_STATES:
+        raise ValueError(f"invalid lifecycle status: {initial_status}")
+
+    serving = raw.get("serving") or {}
+    if not isinstance(serving, dict):
+        raise ValueError("serving must be an object")
+    parameters = serving.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        raise ValueError("serving.parameters must be an object")
+
+    manifest_sha256 = sha256_file(manifest_path)
+    return {
+        "model_id": model_id,
+        "voice_id": voice_id,
+        "name": str(raw.get("name") or model_id).strip() or model_id,
+        "language": list(raw.get("language") or []),
+        "engine": {
+            "name": engine_name,
+            "engine_version": engine_version,
+            "adapter_api_version": adapter_api_version,
+        },
+        "artifacts": resolved_artifacts,
+        "artifact_meta": artifact_meta,
+        "training": dict(raw.get("training") or {}),
+        "runtime": dict(raw.get("runtime") or {}),
+        "capabilities": dict(raw.get("capabilities") or {}),
+        "parameters": dict(parameters),
+        "initial_status": initial_status,
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": manifest_sha256,
+        "revision": manifest_sha256,
+    }
 
 
-def _relocate(stale: str, suffix: str) -> str | None:
-    old = Path(stale)
-    filename = old.name
-    if not filename:
-        return None
+def _registry_relative(path: Path, model_root: Path) -> str:
+    return path.resolve().relative_to(model_root.resolve()).as_posix()
+
+
+def scan_model_root(
+    model_root: Path = MODEL_ROOT,
+    registry_path: Path = REGISTRY_PATH,
+) -> dict:
+    model_root = model_root.expanduser().resolve()
+    model_root.mkdir(parents=True, exist_ok=True)
+    registry = load_registry(registry_path)
+
+    discovered: dict[str, dict] = {}
+    invalid: list[dict] = []
+
+    for manifest_path in sorted(model_root.rglob(MANIFEST_FILENAME)):
+        try:
+            model = validate_manifest(manifest_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            invalid.append({"manifest": str(manifest_path), "error": str(exc)})
+            continue
+
+        model_id = model["model_id"]
+        relative_manifest = _registry_relative(manifest_path, model_root)
+        previous = discovered.get(model_id)
+
+        if previous and previous["manifest_sha256"] != model["manifest_sha256"]:
+            invalid.append({
+                "manifest": relative_manifest,
+                "error": f"duplicate model_id with different manifest: {model_id}",
+            })
+            continue
+
+        discovered[model_id] = {
+            "voice_id": model["voice_id"],
+            "engine": model["engine"]["name"],
+            "engine_version": model["engine"]["engine_version"],
+            "manifest": relative_manifest,
+            "manifest_sha256": model["manifest_sha256"],
+            "revision": model["revision"],
+            "initial_status": model["initial_status"],
+        }
+
+    now = _now_iso()
+    for model_id, item in discovered.items():
+        existing = registry["models"].get(model_id)
+        if existing:
+            status = existing.get("status", item["initial_status"])
+            if status not in LIFECYCLE_STATES:
+                status = "candidate"
+            first_seen = existing.get("discovered_at") or now
+        else:
+            status = item["initial_status"]
+            first_seen = now
+
+        registry["models"][model_id] = {
+            "voice_id": item["voice_id"],
+            "engine": item["engine"],
+            "engine_version": item["engine_version"],
+            "manifest": item["manifest"],
+            "manifest_sha256": item["manifest_sha256"],
+            "revision": item["revision"],
+            "status": status,
+            "present": True,
+            "discovered_at": first_seen,
+            "updated_at": now,
+        }
+
+    discovered_ids = set(discovered)
+    for model_id, entry in registry["models"].items():
+        if model_id not in discovered_ids:
+            entry["present"] = False
+            entry["updated_at"] = now
+
+    save_registry(registry, registry_path)
+    return {
+        "model_root": str(model_root),
+        "discovered": len(discovered),
+        "invalid": invalid,
+        "model_ids": sorted(discovered),
+    }
+
+
+def _entry(model_id: str, registry_path: Path = REGISTRY_PATH) -> tuple[dict, dict]:
+    model_id = _require_id(model_id, "model_id")
+    registry = load_registry(registry_path)
+    entry = registry["models"].get(model_id)
+    if not isinstance(entry, dict):
+        raise ValueError(f"model registry entry not found: {model_id}")
+    return registry, entry
+
+
+def resolve_model(
+    model_id: str,
+    *,
+    model_root: Path = MODEL_ROOT,
+    registry_path: Path = REGISTRY_PATH,
+) -> dict:
+    _, entry = _entry(model_id, registry_path)
+    if not entry.get("present", True):
+        raise ValueError(f"model is not present in Model Root: {model_id}")
+
+    manifest_rel = str(entry.get("manifest") or "").strip()
+    if not manifest_rel:
+        raise ValueError(f"model registry entry has no manifest: {model_id}")
+
+    manifest_path = (model_root.expanduser().resolve() / manifest_rel).resolve()
+    try:
+        manifest_path.relative_to(model_root.expanduser().resolve())
+    except ValueError as exc:
+        raise ValueError(f"model manifest escapes Model Root: {model_id}") from exc
+
+    model = validate_manifest(manifest_path)
+    if model["model_id"] != model_id:
+        raise ValueError(f"model manifest identity mismatch: {model_id}")
+    if model["manifest_sha256"] != entry.get("manifest_sha256"):
+        raise ValueError(
+            f"immutable model manifest changed for {model_id}; run model sync and inspect before use"
+        )
+
+    model["status"] = entry.get("status", "candidate")
+    return model
+
+
+def list_models(
+    *,
+    model_root: Path = MODEL_ROOT,
+    registry_path: Path = REGISTRY_PATH,
+) -> list[dict]:
+    registry = load_registry(registry_path)
+    items = []
+    for model_id in sorted(registry["models"]):
+        entry = registry["models"][model_id]
+        item = {
+            "model_id": model_id,
+            "voice_id": entry.get("voice_id"),
+            "engine": entry.get("engine"),
+            "engine_version": entry.get("engine_version"),
+            "status": entry.get("status"),
+            "present": bool(entry.get("present", True)),
+            "revision": entry.get("revision"),
+            "default_for_voice": registry.get("defaults", {}).get(entry.get("voice_id")) == model_id,
+        }
+        if item["present"]:
+            try:
+                resolved = resolve_model(model_id, model_root=model_root, registry_path=registry_path)
+                item["name"] = resolved["name"]
+                item["language"] = resolved["language"]
+                item["capabilities"] = resolved["capabilities"]
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                item["error"] = str(exc)
+        items.append(item)
+    return items
+
+
+def set_status(
+    model_id: str,
+    status: str,
+    *,
+    registry_path: Path = REGISTRY_PATH,
+) -> None:
+    status = str(status).strip()
+    if status not in LIFECYCLE_STATES:
+        raise ValueError(f"invalid lifecycle status: {status}")
+    registry, entry = _entry(model_id, registry_path)
+    entry["status"] = status
+    entry["updated_at"] = _now_iso()
+    save_registry(registry, registry_path)
+
+
+def promote_model(
+    model_id: str,
+    *,
+    registry_path: Path = REGISTRY_PATH,
+    require_evaluation: bool = True,
+) -> None:
+    from server.evaluation_registry import model_is_promotable
+
+    registry, entry = _entry(model_id, registry_path)
+    if entry.get("status") not in {"validated", "default"}:
+        raise ValueError("only a validated model can be promoted")
+    if require_evaluation and not model_is_promotable(model_id):
+        raise ValueError("model has no promotable validated evaluation")
+
+    voice_id = _require_id(entry.get("voice_id"), "voice_id")
+    previous_id = registry.get("defaults", {}).get(voice_id)
+    if previous_id and previous_id != model_id:
+        previous = registry["models"].get(previous_id)
+        if isinstance(previous, dict) and previous.get("status") == "default":
+            previous["status"] = "validated"
+            previous["updated_at"] = _now_iso()
+
+    entry["status"] = "default"
+    entry["updated_at"] = _now_iso()
+    registry.setdefault("defaults", {})[voice_id] = model_id
+    save_registry(registry, registry_path)
+
+
+def retire_model(model_id: str, *, registry_path: Path = REGISTRY_PATH) -> None:
+    registry, entry = _entry(model_id, registry_path)
+    voice_id = entry.get("voice_id")
+    if registry.get("defaults", {}).get(voice_id) == model_id:
+        raise ValueError("cannot retire the current default model before promoting another model")
+    entry["status"] = "retired"
+    entry["updated_at"] = _now_iso()
+    save_registry(registry, registry_path)
+
+
+def _legacy_search_roots() -> list[Path]:
+    roots: list[Path] = []
+    configured = os.environ.get("CVS_MODEL_SOURCE_ROOTS", "")
+    for item in configured.split(os.pathsep):
+        item = item.strip()
+        if item:
+            roots.append(Path(item).expanduser())
+    gpt_root = os.environ.get("CVS_GPT_SOVITS_ROOT", "").strip()
+    if gpt_root:
+        roots.append(Path(gpt_root).expanduser())
+    roots.append(PROJECT_ROOT.parent / "GPT-SoVITS")
+
+    unique: list[Path] = []
+    seen = set()
+    for root in roots:
+        key = str(root).casefold()
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+def locate_legacy_weight(path_value: str, expected_suffix: str) -> Path:
+    original = Path(path_value)
+    if original.is_file():
+        return original.resolve()
 
     candidates: list[Path] = []
-    for root in _model_roots():
+    for root in _legacy_search_roots():
         if not root.is_dir():
             continue
         try:
-            candidates.extend(path for path in root.rglob(filename) if path.is_file() and path.suffix.lower() == suffix)
+            candidates.extend(
+                path.resolve()
+                for path in root.rglob(original.name)
+                if path.is_file() and path.suffix.lower() == expected_suffix.lower()
+            )
         except OSError:
             continue
 
     if not candidates:
-        return None
-
-    ranked = sorted(candidates, key=lambda item: _candidate_score(old, item), reverse=True)
-    if len(ranked) > 1 and _candidate_score(old, ranked[0]) == _candidate_score(old, ranked[1]):
         raise ValueError(
-            f"ambiguous relocated model weight {filename!r}: "
+            f"legacy model weight not found: {path_value}. "
+            "Set CVS_MODEL_SOURCE_ROOTS or CVS_GPT_SOVITS_ROOT if the weights live elsewhere."
+        )
+
+    old_parts = [item.casefold() for item in original.parts]
+
+    def score(candidate: Path) -> tuple[int, int]:
+        new_parts = [item.casefold() for item in candidate.parts]
+        suffix = 0
+        for left, right in zip(reversed(old_parts), reversed(new_parts)):
+            if left != right:
+                break
+            suffix += 1
+        return suffix, -len(candidate.parts)
+
+    ranked = sorted(candidates, key=score, reverse=True)
+    if len(ranked) > 1 and score(ranked[0]) == score(ranked[1]):
+        raise ValueError(
+            f"ambiguous legacy weight {original.name!r}: "
             + ", ".join(str(item) for item in ranked[:4])
         )
-    return str(ranked[0].resolve())
+    return ranked[0]
 
 
-def resolve_weight_path(value: str, *, suffix: str) -> tuple[str, bool]:
-    path = Path(value)
-    if path.is_file():
-        return str(path.resolve()), False
-
-    relocated = _relocate(value, suffix)
-    if relocated is None:
-        raise ValueError(
-            f"model weight not found: {value}. "
-            "Set CVS_MODEL_ROOTS/CVS_GPT_SOVITS_ROOT or run scripts/migrate_model_registry.cmd."
-        )
-    return relocated, True
+def _copy_immutable(source: Path, destination: Path, expected_hash: str) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        if sha256_file(destination) != expected_hash:
+            raise ValueError(f"immutable artifact already exists with different content: {destination}")
+        return
+    shutil.copy2(source, destination)
+    if sha256_file(destination) != expected_hash:
+        destination.unlink(missing_ok=True)
+        raise ValueError(f"artifact copy verification failed: {destination}")
 
 
-def register_model(
-    model_ref: str,
+def import_gpt_sovits_model(
+    *,
+    voice_id: str,
+    source_model_id: str,
+    name: str,
+    version: str,
     gpt_weights: str,
     sovits_weights: str,
-    *,
+    parameters: dict | None = None,
+    language: list[str] | None = None,
+    model_root: Path = MODEL_ROOT,
     registry_path: Path = REGISTRY_PATH,
-) -> dict:
-    gpt, _ = resolve_weight_path(gpt_weights, suffix=".ckpt")
-    sovits, _ = resolve_weight_path(sovits_weights, suffix=".pth")
+) -> str:
+    voice_id = _require_id(voice_id, "voice_id")
+    source_model_id = _require_id(source_model_id, "source model id")
+    gpt_source = locate_legacy_weight(gpt_weights, ".ckpt")
+    sovits_source = locate_legacy_weight(sovits_weights, ".pth")
 
-    data = load_registry(registry_path)
-    data["models"][model_ref] = {
-        "gpt_weights": gpt,
-        "sovits_weights": sovits,
+    gpt_hash = sha256_file(gpt_source)
+    sovits_hash = sha256_file(sovits_source)
+    identity_hash = hashlib.sha256(
+        f"{gpt_hash}:{sovits_hash}".encode("ascii")
+    ).hexdigest()[:12]
+
+    engine_version = str(version or "").strip() or "unknown"
+    model_id = _safe_component(
+        f"{voice_id}-gpt-sovits-{engine_version}-{source_model_id}-{identity_hash}"
+    )[:127]
+    _require_id(model_id, "model_id")
+
+    model_dir = (
+        model_root.expanduser()
+        / _safe_component(voice_id)
+        / "gpt-sovits"
+        / _safe_component(model_id)
+    )
+    artifacts_dir = model_dir / "artifacts"
+    gpt_destination = artifacts_dir / "gpt.ckpt"
+    sovits_destination = artifacts_dir / "sovits.pth"
+
+    _copy_immutable(gpt_source, gpt_destination, gpt_hash)
+    _copy_immutable(sovits_source, sovits_destination, sovits_hash)
+
+    manifest = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "model_id": model_id,
+        "voice_id": voice_id,
+        "name": str(name or source_model_id).strip() or source_model_id,
+        "language": list(language or []),
+        "engine": {
+            "name": "gpt-sovits",
+            "engine_version": engine_version,
+            "adapter_api_version": "1",
+        },
+        "artifacts": {
+            "gpt": {"path": "artifacts/gpt.ckpt", "sha256": gpt_hash},
+            "sovits": {"path": "artifacts/sovits.pth", "sha256": sovits_hash},
+        },
+        "training": {},
+        "runtime": {},
+        "capabilities": {
+            "fine_tuned_model": True,
+            "zero_shot": True,
+            "emotion": "reference",
+        },
+        "serving": {"parameters": dict(parameters or {})},
+        "lifecycle": {
+            "status": "candidate",
+            "imported_from": "legacy-character-profile",
+            "created_at": _now_iso(),
+        },
     }
-    save_registry(data, registry_path)
-    return dict(data["models"][model_ref])
 
+    model_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = model_dir / MANIFEST_FILENAME
+    if manifest_path.exists():
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if existing != manifest:
+            # created_at is intentionally not part of identity; preserve the first manifest
+            existing_artifacts = existing.get("artifacts") if isinstance(existing, dict) else None
+            if existing_artifacts != manifest["artifacts"] or existing.get("model_id") != model_id:
+                raise ValueError(f"immutable model directory already contains a different manifest: {model_dir}")
+    else:
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
-def resolve_registered_model(
-    model_ref: str,
-    *,
-    registry_path: Path = REGISTRY_PATH,
-) -> dict:
-    data = load_registry(registry_path)
-    raw = data["models"].get(model_ref)
-    if not isinstance(raw, dict):
-        raise ValueError(f"model registry entry not found: {model_ref}")
-
-    gpt_raw = str(raw.get("gpt_weights") or "").strip()
-    sovits_raw = str(raw.get("sovits_weights") or "").strip()
-    if not gpt_raw or not sovits_raw:
-        raise ValueError(f"model registry entry {model_ref!r} is incomplete")
-
-    gpt, gpt_changed = resolve_weight_path(gpt_raw, suffix=".ckpt")
-    sovits, sovits_changed = resolve_weight_path(sovits_raw, suffix=".pth")
-
-    if gpt_changed or sovits_changed:
-        raw["gpt_weights"] = gpt
-        raw["sovits_weights"] = sovits
-        save_registry(data, registry_path)
-
-    return {
-        "gpt_weights": gpt,
-        "sovits_weights": sovits,
-    }
-
-
-def migrate_profile(
-    profile_path: Path,
-    *,
-    registry_path: Path = REGISTRY_PATH,
-    backup: bool = True,
-) -> dict:
-    raw = json.loads(profile_path.read_text(encoding="utf-8"))
-    models = raw.get("models")
-    if not isinstance(models, dict):
-        return {"profile": str(profile_path), "converted": 0, "unchanged": 0}
-
-    converted = 0
-    unchanged = 0
-    for model_id, model in models.items():
-        if not isinstance(model, dict):
-            continue
-        if model.get("model_ref"):
-            unchanged += 1
-            continue
-
-        gpt = str(model.get("gpt_weights") or "").strip()
-        sovits = str(model.get("sovits_weights") or "").strip()
-        if not gpt or not sovits:
-            unchanged += 1
-            continue
-
-        model_ref = make_model_ref(profile_path.stem, str(model_id))
-        register_model(model_ref, gpt, sovits, registry_path=registry_path)
-        model["model_ref"] = model_ref
-        model.pop("gpt_weights", None)
-        model.pop("sovits_weights", None)
-        converted += 1
-
-    if converted:
-        if backup:
-            backup_path = profile_path.with_suffix(".json.pre-model-registry.bak")
-            if not backup_path.exists():
-                shutil.copy2(profile_path, backup_path)
-        staging = profile_path.with_suffix(".json.tmp")
-        staging.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        staging.replace(profile_path)
-
-    return {"profile": str(profile_path), "converted": converted, "unchanged": unchanged}
+    scan_model_root(model_root=model_root, registry_path=registry_path)
+    return model_id
