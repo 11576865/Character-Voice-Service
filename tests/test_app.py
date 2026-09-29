@@ -249,10 +249,8 @@ def test_example_template_cannot_be_used_as_a_voice():
 
 
 def test_health_reports_backend_offline(monkeypatch):
-    def fail(*args, **kwargs):
-        raise OSError("offline")
-
-    monkeypatch.setattr(app_module.urllib.request, "urlopen", fail)
+    adapter = app_module.get_adapter("gpt-sovits")
+    monkeypatch.setattr(adapter, "health", lambda: {"status": "offline", "error": "offline"})
     response = client.get("/health")
 
     assert response.status_code == 200
