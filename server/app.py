@@ -16,7 +16,8 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from server.backends.gpt_sovits import synthesize
+from server.engines import get_adapter, list_engines, synthesize
+from server.model_registry import list_models, promote_model, retire_model, scan_model_root
 from server.book_library import BookLibrary
 from server.emotion_router import choose_reference
 from server.epub_export import export_read_aloud
@@ -203,18 +204,52 @@ def root():
 
 @app.get("/health")
 def health():
-    try:
-        urllib.request.urlopen(GPT_SOVITS_HEALTH_URL, timeout=2)
-        backend_status = "ready"
-    except Exception:
-        backend_status = "offline"
-
+    backend = get_adapter("gpt-sovits").health()
     return {
         "status": "ok",
         "service": "character-voice-service",
         "backend": "gpt-sovits",
-        "backend_status": backend_status,
+        "backend_status": backend["status"],
     }
+
+
+@app.get("/v1/engines")
+def engines():
+    return {"engines": list_engines()}
+
+
+@app.get("/v1/models")
+def models():
+    try:
+        return {"models": list_models()}
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Model Registry error: {exc}") from exc
+
+
+@app.post("/v1/admin/models/sync", dependencies=[Depends(require_admin)])
+def sync_models():
+    try:
+        return scan_model_root()
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Model sync failed: {exc}") from exc
+
+
+@app.post("/v1/admin/models/{model_id}/promote", dependencies=[Depends(require_admin)])
+def promote_registered_model(model_id: str):
+    try:
+        promote_model(model_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"model_id": model_id, "status": "default"}
+
+
+@app.post("/v1/admin/models/{model_id}/retire", dependencies=[Depends(require_admin)])
+def retire_registered_model(model_id: str):
+    try:
+        retire_model(model_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"model_id": model_id, "status": "retired"}
 
 
 @app.get("/v1/voices")
@@ -530,9 +565,14 @@ def _generate_book(book_id: str, settings: dict, cancel: threading.Event):
             text_to_speak = spoken_text(segment["text"], book.get("pronunciations", {}))
             selection, actual_reference = effective_selection(
                 voice, model_id, reference_id, text_to_speak)
+            selected_model = selection["selected_model"]
+            model_identity = {
+                "model_id": selected_model.get("model_id") or selected_model["id"],
+                "revision": selected_model.get("revision"),
+            }
             fingerprint = hashlib.sha256(json.dumps({
                 "text": text_to_speak, "voice": voice,
-                "model": selection["selected_model"],
+                "model": model_identity,
                 "reference": selection["selected_reference"],
                 "speed": settings["speed"],
             }, sort_keys=True).encode()).hexdigest()
@@ -543,7 +583,9 @@ def _generate_book(book_id: str, settings: dict, cancel: threading.Event):
                     not library.audio_path(book_id, segment["id"]):
                 audio = synthesize(text_to_speak, settings["speed"], selection)
                 library.add_version(book_id, segment["id"], audio, {
-                    "voice": voice, "model_id": selection["selected_model"]["id"],
+                    "voice": voice,
+                    "model_id": selection["selected_model"].get("model_id") or selection["selected_model"]["id"],
+                    "model_revision": selection["selected_model"].get("revision"),
                     "reference_id": actual_reference, "speed": settings["speed"],
                     "fingerprint": fingerprint,
                     "pronunciationsUpdatedAt": book.get("pronunciationsUpdatedAt"),
