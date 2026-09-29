@@ -3,16 +3,17 @@ import json
 from pathlib import Path
 
 from server.config import VOICE_DIR
-from server.model_registry import REGISTRY_PATH, migrate_profile
+from server.model_registry import MODEL_ROOT, REGISTRY_PATH, migrate_profile
 from server.voice_profiles import iter_real_profile_paths
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Move GPT-SoVITS weight paths out of voices/*.json into the portable model registry."
+        description="Import legacy GPT-SoVITS character weights into immutable Model Root artifacts."
     )
     parser.add_argument("--voice-dir", type=Path, default=VOICE_DIR)
     parser.add_argument("--registry", type=Path, default=REGISTRY_PATH)
+    parser.add_argument("--model-root", type=Path, default=MODEL_ROOT)
     parser.add_argument("--no-backup", action="store_true")
     args = parser.parse_args()
 
@@ -22,6 +23,7 @@ def main() -> int:
             reports.append(
                 migrate_profile(
                     path,
+                    model_root=args.model_root,
                     registry_path=args.registry,
                     backup=not args.no_backup,
                 )
@@ -32,6 +34,7 @@ def main() -> int:
     converted = sum(item["converted"] for item in reports)
     print(json.dumps(
         {
+            "model_root": str(args.model_root),
             "registry": str(args.registry),
             "profiles": reports,
             "converted_models": converted,
