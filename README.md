@@ -26,7 +26,7 @@ Reader / 后续其他客户端
 - `scripts/import_reference_pack.cmd` 可将 HSR Reference Pack 的音频、文本和情绪标签导入一个已存在的 v2 角色；重复运行按原始语音身份更新。
 - `reference_id: "auto"` 可试用保守的文本情绪选参考；默认仍为角色注册表中的参考。
 - 未指定时使用角色默认模型与默认参考语音；
-- 注册了 `.ckpt/.pth` 路径的模型可自动调用 GPT-SoVITS 官方权重切换接口；
+- 模型可通过本机 `data/model-registry.json` 的稳定 `model_ref` 解析 `.ckpt/.pth`，并自动调用 GPT-SoVITS 官方权重切换接口；
 - 旧版“单模型 + 单参考语音”配置继续兼容；
 - `GET /v1/voices` 不暴露本机模型路径、参考 WAV 路径或参考音频逐字文本。
 
@@ -113,8 +113,7 @@ Profile v2 示例：
       "name": "Self 400 v2Pro",
       "engine": "gpt-sovits",
       "version": "v2pro",
-      "gpt_weights": "D:/Models/March7th/march.ckpt",
-      "sovits_weights": "D:/Models/March7th/march.pth"
+      "model_ref": "march-7th--self-400-v2pro"
     }
   },
 
@@ -149,12 +148,19 @@ Profile v2 示例：
 
 ## 模型切换
 
-受管理模型同时配置：
+推荐的受管理模型配置：
 
 ```text
-gpt_weights
-sovits_weights
+model_ref
 ```
+
+实际 `.ckpt/.pth` 路径集中保存在 Git 忽略的 `data/model-registry.json`。旧的 `gpt_weights + sovits_weights` 直接路径仍兼容。首次迁移现有角色配置可运行：
+
+```powershell
+.\scripts\migrate_model_registry.cmd
+```
+
+迁移会为 `voices/*.json` 创建一次备份，把绝对模型路径移入 Model Registry，并用稳定 `model_ref` 替代。之后如果 GPT-SoVITS 目录迁移而旧权重路径失效，Service 会从 `CVS_MODEL_ROOTS`、`CVS_GPT_SOVITS_ROOT` 和项目同级的 `GPT-SoVITS` 目录尝试重新定位唯一匹配权重，并自动回写 Model Registry。
 
 Service 在需要时调用：
 
@@ -188,14 +194,14 @@ Copy-Item .\voices\example.json .\voices\march-7th.json
 
 ## 日常启动
 
-先启动 GPT-SoVITS：
+先启动 GPT-SoVITS（当前 Windows 安装示例）：
 
 ```powershell
-cd C:\Users\27619\Downloads\GPT-SoVITS-v2pro-20250604-nvidia50
-.\runtime\python.exe api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
+cd D:\BaiduNetdiskDownload\GPT-SoVITS
+D:\BaiduNetdiskDownload\GPT-SoVITS-env\python.exe api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 ```
 
-再启动本服务：
+也可使用当前的 Character Voice System Supervisor 统一启动。再启动本服务：
 
 ```powershell
 .\scripts\run_server.cmd
