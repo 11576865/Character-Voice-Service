@@ -380,14 +380,20 @@ def promote_model(
     *,
     registry_path: Path = REGISTRY_PATH,
     require_evaluation: bool = True,
+    evaluation_dir: Path | None = None,
 ) -> None:
     from server.evaluation_registry import model_is_promotable
 
     registry, entry = _entry(model_id, registry_path)
     if entry.get("status") not in {"validated", "default"}:
         raise ValueError("only a validated model can be promoted")
-    if require_evaluation and not model_is_promotable(model_id):
-        raise ValueError("model has no promotable validated evaluation")
+    if require_evaluation:
+        if evaluation_dir is None:
+            promotable = model_is_promotable(model_id)
+        else:
+            promotable = model_is_promotable(model_id, directory=evaluation_dir)
+        if not promotable:
+            raise ValueError("model has no promotable validated evaluation")
 
     voice_id = _require_id(entry.get("voice_id"), "voice_id")
     previous_id = registry.get("defaults", {}).get(voice_id)
