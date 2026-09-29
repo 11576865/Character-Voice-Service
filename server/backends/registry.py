@@ -36,3 +36,9 @@ def engine_summaries() -> list[dict[str, Any]]:
             "capabilities": engine.capabilities(),
         })
     return items
+
+
+def synthesize(text: str, speed: float, profile: dict) -> bytes:
+    model = profile.get("selected_model") or {}
+    engine_id = str(model.get("engine") or "gpt-sovits").strip().lower()
+    return get_engine(engine_id).synthesize(text=text, speed=speed, profile=profile)
