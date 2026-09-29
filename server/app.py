@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from server.backends.gpt_sovits import synthesize
+from server.backends.registry import engine_summaries, synthesize
 from server.book_library import BookLibrary
 from server.emotion_router import choose_reference
 from server.epub_export import export_read_aloud
@@ -26,7 +26,6 @@ from server.pronunciations import spoken_text
 from server.config import (
     ADMIN_TOKEN,
     DATA_DIR,
-    GPT_SOVITS_HEALTH_URL,
     HOST,
     PORT,
     SAVE_DIR,
@@ -57,7 +56,7 @@ jobs_lock = threading.Lock()
 
 
 class SpeechRequest(BaseModel):
-    model: str = "gpt-sovits"
+    model: str = "auto"
     voice: str
     model_id: str | None = None
     reference_id: str | None = None
@@ -203,18 +202,25 @@ def root():
 
 @app.get("/health")
 def health():
-    try:
-        urllib.request.urlopen(GPT_SOVITS_HEALTH_URL, timeout=2)
-        backend_status = "ready"
-    except Exception:
-        backend_status = "offline"
-
+    engines = engine_summaries()
+    ready = [item["id"] for item in engines if item["status"] == "ready"]
     return {
         "status": "ok",
         "service": "character-voice-service",
+        "engines": engines,
+        "ready_engines": ready,
+        # Legacy compatibility for clients that only knew GPT-SoVITS.
         "backend": "gpt-sovits",
-        "backend_status": backend_status,
+        "backend_status": next(
+            (item["status"] for item in engines if item["id"] == "gpt-sovits"),
+            "offline",
+        ),
     }
+
+
+@app.get("/v1/engines")
+def engines():
+    return {"engines": engine_summaries()}
 
 
 @app.get("/v1/voices")
@@ -295,8 +301,8 @@ def speech(request: SpeechRequest):
     if request.speed <= 0:
         raise HTTPException(status_code=400, detail="speed must be greater than 0")
 
-    if request.model != "gpt-sovits":
-        raise HTTPException(status_code=400, detail="current version supports gpt-sovits only")
+    if request.model not in {"auto", "gpt-sovits", "index-tts"}:
+        raise HTTPException(status_code=400, detail=f"unsupported TTS engine: {request.model}")
 
     profile = load_voice_profile(request.voice)
     reference_id = request.reference_id
@@ -312,6 +318,16 @@ def speech(request: SpeechRequest):
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
 
+    selected_engine = selection["selected_model"]["engine"]
+    if request.model != "auto" and request.model != selected_engine:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"requested engine {request.model!r} does not match selected "
+                f"model engine {selected_engine!r}"
+            ),
+        )
+
     audio = synthesize(
         text=request.input,
         speed=request.speed,
@@ -322,6 +338,7 @@ def speech(request: SpeechRequest):
     headers = {}
     headers["X-Selected-Reference"] = selection["selected_reference"]["id"]
     headers["X-Reference-Reason"] = selection_reason
+    headers["X-Selected-Engine"] = selected_engine
     if saved_path is not None:
         headers["X-Generated-Filename"] = saved_path.name
 
