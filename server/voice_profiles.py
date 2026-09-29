@@ -35,14 +35,18 @@ def _normalize_model(model_id: str, raw: object) -> dict:
         raise ValueError(f"model {model_id} must be an object")
 
     engine = str(raw.get("engine") or "gpt-sovits").strip().lower()
-    if engine != "gpt-sovits":
+    if engine not in {"gpt-sovits", "index-tts"}:
         raise ValueError(f"model {model_id}: unsupported engine {engine!r}")
 
     gpt_weights = str(raw.get("gpt_weights") or "").strip()
     sovits_weights = str(raw.get("sovits_weights") or "").strip()
-    if bool(gpt_weights) != bool(sovits_weights):
+    if engine == "gpt-sovits" and bool(gpt_weights) != bool(sovits_weights):
         raise ValueError(
             f"model {model_id}: gpt_weights and sovits_weights must be configured together"
+        )
+    if engine == "index-tts" and (gpt_weights or sovits_weights):
+        raise ValueError(
+            f"model {model_id}: IndexTTS models do not accept GPT/SoVITS weight paths"
         )
 
     parameters = raw.get("parameters") or {}
@@ -56,7 +60,7 @@ def _normalize_model(model_id: str, raw: object) -> dict:
         "version": str(raw.get("version") or "").strip(),
         "gpt_weights": gpt_weights or None,
         "sovits_weights": sovits_weights or None,
-        "managed": bool(gpt_weights and sovits_weights),
+        "managed": engine == "gpt-sovits" and bool(gpt_weights and sovits_weights),
         "parameters": dict(parameters),
     }
 
@@ -231,6 +235,9 @@ def resolve_profile_selection(
         "reference_text": reference["text"],
         "reference_language": reference["language"],
         "aux_reference_audio": list(reference.get("aux_audio") or []),
+        "emotion_reference_audio": str(
+            (reference.get("parameters") or {}).get("emotion_audio") or ""
+        ).strip() or None,
         "selected_model": dict(model),
         "selected_reference": dict(reference),
     }
