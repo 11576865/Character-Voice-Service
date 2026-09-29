@@ -2,9 +2,9 @@
 setlocal
 cd /d "%~dp0.."
 if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" "scripts\migrate_model_registry.py" %*
+  ".venv\Scripts\python.exe" -m scripts.migrate_model_registry %*
 ) else (
-  python "scripts\migrate_model_registry.py" %*
+  python -m scripts.migrate_model_registry %*
 )
 if errorlevel 1 pause
 endlocal
