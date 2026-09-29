@@ -1,10 +1,23 @@
-# Character Registry
+# Character Registry and Model Registry
 
-Character Voice Service treats a **character** as a stable identity that can own multiple GPT-SoVITS model versions and multiple reference voices.
+Character Voice Service treats a **character** as a stable identity. Character identity, model identity, reference assets, evaluation history and serving policy are separate concerns.
 
-The registry is intentionally file-based for the current local-first stage. Reference WAVs stay in the local Reference Library. GPT-SoVITS model locations are now separated into a local Model Registry (`data/model-registry.json`), so character profiles can keep stable model references instead of machine-specific absolute weight paths.
+The current architecture follows this boundary:
 
-## Profile v2
+```text
+Character Registry
+      │ stable model_id
+      ▼
+Model Registry / Model Root
+      │ engine + immutable artifacts
+      ▼
+Engine Adapter
+      │
+      ▼
+Speech Engine
+```
+
+## Character profile v2
 
 A real profile keeps the stable character ID in its filename:
 
@@ -12,203 +25,234 @@ A real profile keeps the stable character ID in its filename:
 voices/march-7th.json
 ```
 
-Example structure:
+A registered model is referenced by stable `model_id`. Local aliases remain useful for Reader UI compatibility:
 
 ```json
 {
   "schema_version": 2,
   "name": "March 7th",
   "target_language": "en",
-
-  "default_model": "self-400-v2pro",
+  "default_model": "local-v4",
   "models": {
-    "self-400-v2pro": {
-      "name": "Self 400 v2Pro",
-      "engine": "gpt-sovits",
-      "version": "v2pro",
-      "model_ref": "march-7th--self-400-v2pro"
-    },
-    "downloaded-v2pro": {
-      "name": "Downloaded v2Pro",
-      "engine": "gpt-sovits",
-      "version": "v2pro",
-      "model_ref": "march-7th--downloaded-v2pro"
+    "local-v4": {
+      "name": "Local v4",
+      "model_id": "march7-en-gsv-v4-local-0123456789ab"
     }
   },
-
   "default_reference": "neutral-01",
   "references": {
     "neutral-01": {
       "name": "Neutral 01",
       "audio": "D:/References/March7th/neutral-01.wav",
-      "text": "Exact official transcript of the reference audio.",
+      "text": "Exact official transcript.",
       "language": "en",
       "emotion": "neutral",
       "intensity": 0.4,
       "quality": "good"
-    },
-    "surprised-01": {
-      "name": "Surprised 01",
-      "audio": "D:/References/March7th/surprised-01.wav",
-      "text": "Exact official transcript of the surprised reference.",
-      "language": "en",
-      "emotion": "surprised",
-      "intensity": 0.8,
-      "quality": "good"
     }
-  },
-
-  "parameters": {
-    "top_k": 15,
-    "top_p": 1.0,
-    "temperature": 1.0
   }
 }
 ```
 
-## Stable IDs
+Legacy entries containing explicit `gpt_weights` + `sovits_weights` remain supported during migration.
 
-- Character ID: profile filename stem, such as `march-7th`.
-- Model ID: key inside `models`, such as `self-400-v2pro`.
-- Reference ID: key inside `references`, such as `surprised-01`.
+## Model Root
 
-IDs are machine-stable. `name` fields are display labels and may change without changing API identity.
+Models are immutable artifacts. The default local Model Root is `data/models` and can be changed with `CVS_MODEL_ROOT`.
 
-## Portable Model Registry
+```text
+data/models/
+└── march-7th/
+    └── gpt-sovits/
+        └── march7-en-gsv-v4-local-0123456789ab/
+            ├── model.json
+            └── artifacts/
+                ├── gpt.ckpt
+                └── sovits.pth
+```
 
-A v2 character model may use a stable `model_ref`:
+The directory name is not the identity. Identity is carried by `model_id`, the manifest and SHA-256 values.
+
+A GPT-SoVITS manifest contains, at minimum:
 
 ```json
 {
-  "name": "Local v4",
-  "engine": "gpt-sovits",
-  "version": "v4",
-  "model_ref": "march-7th--local-v4"
+  "schema_version": "1.0",
+  "model_id": "march7-en-gsv-v4-local-0123456789ab",
+  "voice_id": "march-7th",
+  "engine": {
+    "name": "gpt-sovits",
+    "engine_version": "v4",
+    "adapter_api_version": "1"
+  },
+  "artifacts": {
+    "gpt": {
+      "path": "artifacts/gpt.ckpt",
+      "sha256": "..."
+    },
+    "sovits": {
+      "path": "artifacts/sovits.pth",
+      "sha256": "..."
+    }
+  },
+  "training": {},
+  "runtime": {},
+  "capabilities": {
+    "fine_tuned_model": true,
+    "zero_shot": true,
+    "emotion": "reference"
+  },
+  "lifecycle": {
+    "status": "candidate"
+  }
 }
 ```
 
-The referenced local registry is stored under `data/model-registry.json` and is Git-ignored. It owns the actual `.ckpt/.pth` paths.
+Artifact paths are relative to the immutable model directory. Scanner validates SHA-256 before registration.
 
-When a registered weight path no longer exists, Character Voice Service searches the configured model roots by filename and matching path suffix. A unique match is written back to `data/model-registry.json` automatically. Discovery roots are:
+## Scanner and local index
 
-- `CVS_MODEL_ROOTS` (multiple roots separated by the platform path separator);
-- `CVS_GPT_SOVITS_ROOT`;
-- the sibling `GPT-SoVITS` directory next to Character-Voice-Service.
+`data/model-registry.json` is a local scan index and lifecycle store. It is **not** the canonical model manifest.
 
-Existing profiles that still contain `gpt_weights` and `sovits_weights` remain compatible. To migrate all local v2 profiles to stable model references, run:
+Scanner may automatically:
+
+```text
+discover
+validate
+hash
+register
+```
+
+It must not automatically:
+
+```text
+promote-to-default
+```
+
+If an already registered immutable manifest changes, the entry is quarantined rather than silently accepted.
+
+## Lifecycle
+
+```text
+discovered
+   ↓
+candidate
+   ↓
+validated
+   ↓
+default
+   ↓
+retired
+
+candidate
+   ↓
+quarantined
+```
+
+A newly imported model is a candidate. Production default is a manually promoted, validated `model_id`, never "latest checkpoint".
+
+The local registry can hold one default `model_id` per `voice_id`. Character routing honors that promoted default when the character profile contains the corresponding model.
+
+## Evaluation Registry
+
+Evaluation records live under `data/evaluations` and are versioned independently of model artifacts. A promotion may require a record whose decision is:
+
+```json
+{
+  "decision": {
+    "status": "validated",
+    "promotable": true
+  }
+}
+```
+
+The current implementation provides the Evaluation Registry and promotion gate. A full automatic benchmark generator / blind-listening UI remains later work.
+
+## Engine Adapter
+
+Character Voice Service owns:
+
+- character identity;
+- model registration and lifecycle;
+- reference assets;
+- evaluation records;
+- request routing;
+- stable API.
+
+Each engine owns:
+
+- checkpoint format;
+- tokenizer and internal architecture;
+- model loading;
+- inference implementation;
+- engine-specific parameters.
+
+The current adapter contract exposes engine identity, capabilities, health, model load/unload and synthesis. Only the GPT-SoVITS adapter is implemented today; other engines can be added without changing Character IDs or the Reader API.
+
+## Legacy migration
+
+Run:
 
 ```powershell
 .\scripts\migrate_model_registry.cmd
 ```
 
-The migration creates a one-time `.json.pre-model-registry.bak` backup, moves the weight locations into the local registry, and replaces the two absolute paths in each model with `model_ref`.
+For each v2 profile that still contains explicit GPT-SoVITS weight paths, migration:
 
-## Managed and externally loaded models
+1. locates the current `.ckpt/.pth` files;
+2. copies them into Model Root;
+3. verifies SHA-256;
+4. creates an immutable `model.json`;
+5. registers the model as `candidate`;
+6. creates `.json.pre-model-registry.bak` once;
+7. replaces the two machine-specific paths with stable `model_id`.
 
-A model is **managed** when it resolves to both GPT and SoVITS weights, either through `model_ref` or through the legacy explicit `gpt_weights` + `sovits_weights` pair.
+Legacy source discovery checks:
 
-Before synthesis the service uses GPT-SoVITS' official control endpoints:
-
-```text
-GET /set_sovits_weights?weights_path=...
-GET /set_gpt_weights?weights_path=...
-POST /tts
-```
-
-The active managed weight pair is cached. Repeated requests to the same model do not reload it.
-
-Model switching and synthesis share one service-side lock. This is deliberate: GPT-SoVITS has one active weight pair, so two concurrent requests must not interleave a model switch with another request's synthesis.
-
-Legacy profiles remain valid. They normalize to one model named `loaded`, representing whatever model was already loaded in GPT-SoVITS before Character Voice Service started.
-
-There is one safety restriction: after Character Voice Service switches GPT-SoVITS to a managed model, it will not silently route back to an unregistered externally loaded model. The service no longer knows which weights should be restored. Register the model in the local Model Registry (preferred), keep an explicit weight pair for compatibility, or restart both processes before using that legacy/external model again.
+- `CVS_MODEL_SOURCE_ROOTS`;
+- `CVS_GPT_SOVITS_ROOT`;
+- a sibling `GPT-SoVITS` directory.
 
 ## Reference selection
 
-A character may register many references. Reference metadata can include:
-
-- exact reference transcript;
-- language;
-- optional auxiliary reference WAVs;
-- emotion label;
-- 0..1 intensity;
-- quality label;
-- optional inference parameter overrides.
-
-At this stage the service only performs **explicit reference selection**. Automatic emotion routing is a later layer.
-
-## API
-
-Existing requests remain valid:
-
-```json
-{
-  "voice": "march-7th",
-  "input": "Hello."
-}
-```
-
-They use the character's default model and default reference.
-
-Explicit selection:
-
-```json
-{
-  "voice": "march-7th",
-  "model_id": "self-400-v2pro",
-  "reference_id": "surprised-01",
-  "input": "What are you doing here?",
-  "speed": 1.0
-}
-```
-
-`GET /v1/voices` returns safe registry metadata for UI selection. It does **not** expose local model paths, local reference paths, or reference transcripts.
-
-## Parameter precedence
-
-Inference parameters are merged in this order:
+References remain character-owned assets. Parameter precedence is:
 
 ```text
 character defaults
-  < model overrides
+  < model manifest serving parameters
+  < character model overrides
   < reference overrides
 ```
 
-Later layers can therefore tune one model or one reference without duplicating the full character configuration.
+## Book audio revision
 
-## Legacy compatibility
+For registered immutable models, book generation fingerprints model identity using:
 
-The original profile shape remains accepted:
-
-```json
-{
-  "name": "March 7th",
-  "reference_audio": "D:/ref.wav",
-  "reference_text": "Exact transcript.",
-  "reference_language": "en",
-  "target_language": "en",
-  "parameters": {}
-}
+```text
+model_id + model revision
 ```
 
-No immediate migration is required for an already working single-model installation.
+The revision is the immutable manifest SHA-256. Moving the Model Root therefore does not invalidate already generated book audio; changing the actual model artifact/manifest does.
 
 ## Current boundary
 
-Implemented here:
+Implemented:
 
-- many characters on disk;
-- many registered model versions per character;
-- safe GPT-SoVITS model switching;
-- many explicitly selectable references per character;
-- backward-compatible legacy profiles;
-- reader model/reference selectors;
-- no exposure of private local paths through `/v1/voices`.
+- stable character IDs;
+- multiple models and references per character;
+- immutable Model Root manifests with SHA-256 verification;
+- Model Registry scanning and lifecycle state;
+- quarantine on manifest mutation;
+- Evaluation Registry storage and promotion gate;
+- manual default promotion/retirement API;
+- EngineAdapter boundary with GPT-SoVITS implementation;
+- legacy inline GPT-SoVITS compatibility and migration;
+- model revision-aware book audio fingerprints.
 
-Not implemented here:
+Not yet implemented:
 
-- automatic import of an HSR Reference Pack;
-- automatic text-to-emotion classification;
-- long-form emotion continuity planning;
-- multi-GPU/model worker pools;
-- loading several GPT-SoVITS models in VRAM simultaneously.
+- automatic Evaluation generation;
+- blind A/B listening management UI;
+- automatic candidate benchmark execution;
+- adapters for IndexTTS / CosyVoice / F5 / Fish / other engines;
+- multi-engine scheduler and resident-model pool.
