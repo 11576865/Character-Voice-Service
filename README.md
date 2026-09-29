@@ -26,7 +26,7 @@ Reader / 后续其他客户端
 - `scripts/import_reference_pack.cmd` 可将 HSR Reference Pack 的音频、文本和情绪标签导入一个已存在的 v2 角色；重复运行按原始语音身份更新。
 - `reference_id: "auto"` 可试用保守的文本情绪选参考；默认仍为角色注册表中的参考。
 - 未指定时使用角色默认模型与默认参考语音；
-- 注册了 `.ckpt/.pth` 路径的模型可自动调用 GPT-SoVITS 官方权重切换接口；
+- 模型以不可变 Model Root artifact + `model.json` manifest 注册；角色配置只保存稳定 `model_id`，实际 `.ckpt/.pth` 由 Engine Adapter 解析；
 - 旧版“单模型 + 单参考语音”配置继续兼容；
 - `GET /v1/voices` 不暴露本机模型路径、参考 WAV 路径或参考音频逐字文本。
 
@@ -113,8 +113,7 @@ Profile v2 示例：
       "name": "Self 400 v2Pro",
       "engine": "gpt-sovits",
       "version": "v2pro",
-      "gpt_weights": "D:/Models/March7th/march.ckpt",
-      "sovits_weights": "D:/Models/March7th/march.pth"
+      "model_id": "march7-en-gsv-v2pro-20260928-a"
     }
   },
 
@@ -149,12 +148,55 @@ Profile v2 示例：
 
 ## 模型切换
 
-受管理模型同时配置：
+推荐的受管理模型配置只保存稳定模型身份：
+
+```json
+{
+  "model_id": "march7-en-gsv-v4-local-0123456789ab"
+}
+```
+
+真实模型位于 Model Root。每个模型目录包含不可变 artifact 与 `model.json`：
 
 ```text
-gpt_weights
-sovits_weights
+data/models/
+└── march-7th/
+    └── gpt-sovits/
+        └── march7-en-gsv-v4-local-0123456789ab/
+            ├── model.json
+            └── artifacts/
+                ├── gpt.ckpt
+                └── sovits.pth
 ```
+
+`model.json` 记录 `model_id`、`voice_id`、engine、artifact 相对路径与 SHA-256、能力、训练/运行元数据和初始生命周期。文件名本身不是模型身份。
+
+`data/model-registry.json` 只是本机扫描索引和生命周期状态，不是模型事实源。Scanner 可以自动 discover / validate / hash / register，但不会自动把新 checkpoint 提升为生产默认。
+
+现有 `gpt_weights + sovits_weights` 角色配置继续兼容。首次迁移运行：
+
+```powershell
+.\scripts\migrate_model_registry.cmd
+```
+
+迁移会：
+
+1. 在旧位置或 `CVS_MODEL_SOURCE_ROOTS` / `CVS_GPT_SOVITS_ROOT` / 同级 `GPT-SoVITS` 中重新定位权重；
+2. 复制并校验到不可变 Model Root；
+3. 计算 SHA-256；
+4. 生成 `model.json`；
+5. 注册为 `candidate`；
+6. 给原角色 JSON 留 `.json.pre-model-registry.bak`；
+7. 用稳定 `model_id` 替换两个绝对权重路径。
+
+模型生命周期为：
+
+```text
+discovered -> candidate -> validated -> default -> retired
+                         \-> quarantined
+```
+
+自动发现不等于自动上线。Promotion 只允许已验证模型，并可要求存在可提升的 Evaluation 记录。
 
 Service 在需要时调用：
 
@@ -188,14 +230,14 @@ Copy-Item .\voices\example.json .\voices\march-7th.json
 
 ## 日常启动
 
-先启动 GPT-SoVITS：
+先启动 GPT-SoVITS（当前 Windows 安装示例）：
 
 ```powershell
-cd C:\Users\27619\Downloads\GPT-SoVITS-v2pro-20250604-nvidia50
-.\runtime\python.exe api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
+cd D:\BaiduNetdiskDownload\GPT-SoVITS
+D:\BaiduNetdiskDownload\GPT-SoVITS-env\python.exe api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 ```
 
-再启动本服务：
+也可使用当前的 Character Voice System Supervisor 统一启动。再启动本服务：
 
 ```powershell
 .\scripts\run_server.cmd

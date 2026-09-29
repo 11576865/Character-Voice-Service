@@ -20,6 +20,7 @@ references/*
 !references/.gitkeep
 voices/*.json
 !voices/example.json
+voices/*.bak
 
 # Model weights
 *.pth

@@ -2,6 +2,8 @@ import json
 import re
 from pathlib import Path
 
+from server.model_registry import default_model_id, resolve_model
+
 
 TEMPLATE_FILENAME = "example.json"
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -34,29 +36,74 @@ def _normalize_model(model_id: str, raw: object) -> dict:
     if not isinstance(raw, dict):
         raise ValueError(f"model {model_id} must be an object")
 
-    engine = str(raw.get("engine") or "gpt-sovits").strip().lower()
-    if engine != "gpt-sovits":
-        raise ValueError(f"model {model_id}: unsupported engine {engine!r}")
+    registry_model_id = str(raw.get("model_id") or "").strip() or None
+    explicit_gpt = str(raw.get("gpt_weights") or "").strip()
+    explicit_sovits = str(raw.get("sovits_weights") or "").strip()
 
-    gpt_weights = str(raw.get("gpt_weights") or "").strip()
-    sovits_weights = str(raw.get("sovits_weights") or "").strip()
-    if bool(gpt_weights) != bool(sovits_weights):
+    if registry_model_id and (explicit_gpt or explicit_sovits):
         raise ValueError(
-            f"model {model_id}: gpt_weights and sovits_weights must be configured together"
+            f"model {model_id}: use model_id or explicit weight paths, not both"
         )
 
     parameters = raw.get("parameters") or {}
     if not isinstance(parameters, dict):
         raise ValueError(f"model {model_id}: parameters must be an object")
 
+    if registry_model_id:
+        resolved = resolve_model(registry_model_id)
+        engine = resolved["engine"]["name"]
+        engine_version = resolved["engine"]["engine_version"]
+        effective_parameters = dict(resolved.get("parameters") or {})
+        effective_parameters.update(parameters)
+
+        gpt_weights = None
+        sovits_weights = None
+        if engine == "gpt-sovits":
+            artifacts = resolved.get("artifacts") or {}
+            gpt_weights = artifacts.get("gpt")
+            sovits_weights = artifacts.get("sovits")
+            if not gpt_weights or not sovits_weights:
+                raise ValueError(
+                    f"model {model_id}: GPT-SoVITS manifest requires gpt and sovits artifacts"
+                )
+
+        return {
+            "id": model_id,
+            "model_id": registry_model_id,
+            "name": str(raw.get("name") or resolved.get("name") or model_id).strip() or model_id,
+            "engine": engine,
+            "version": str(raw.get("version") or engine_version).strip(),
+            "revision": resolved.get("revision"),
+            "status": resolved.get("status"),
+            "gpt_weights": gpt_weights,
+            "sovits_weights": sovits_weights,
+            "managed": True,
+            "parameters": effective_parameters,
+        }
+
+    engine = str(raw.get("engine") or "gpt-sovits").strip().lower()
+    if engine != "gpt-sovits":
+        raise ValueError(
+            f"model {model_id}: legacy inline model only supports gpt-sovits; "
+            "register other engines in Model Root"
+        )
+
+    if bool(explicit_gpt) != bool(explicit_sovits):
+        raise ValueError(
+            f"model {model_id}: gpt_weights and sovits_weights must be configured together"
+        )
+
     return {
         "id": model_id,
+        "model_id": None,
         "name": str(raw.get("name") or model_id).strip() or model_id,
         "engine": engine,
         "version": str(raw.get("version") or "").strip(),
-        "gpt_weights": gpt_weights or None,
-        "sovits_weights": sovits_weights or None,
-        "managed": bool(gpt_weights and sovits_weights),
+        "revision": None,
+        "status": None,
+        "gpt_weights": explicit_gpt or None,
+        "sovits_weights": explicit_sovits or None,
+        "managed": bool(explicit_gpt and explicit_sovits),
         "parameters": dict(parameters),
     }
 
@@ -200,7 +247,9 @@ def normalize_profile(raw: object) -> dict:
 
 def read_valid_profile(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
-        return normalize_profile(json.load(handle))
+        profile = normalize_profile(json.load(handle))
+    profile["_voice_id"] = path.stem
+    return profile
 
 
 def resolve_profile_selection(
@@ -209,7 +258,26 @@ def resolve_profile_selection(
     model_id: str | None = None,
     reference_id: str | None = None,
 ) -> dict:
-    selected_model_id = model_id or profile["default_model"]
+    selected_model_id = model_id
+    if selected_model_id is None:
+        registry_default = None
+        voice_id = profile.get("_voice_id")
+        if voice_id:
+            try:
+                registry_default = default_model_id(str(voice_id))
+            except (OSError, ValueError, json.JSONDecodeError):
+                registry_default = None
+        if registry_default:
+            selected_model_id = next(
+                (
+                    alias
+                    for alias, item in profile["models"].items()
+                    if item.get("model_id") == registry_default
+                ),
+                None,
+            )
+        selected_model_id = selected_model_id or profile["default_model"]
+
     selected_reference_id = reference_id or profile["default_reference"]
 
     if selected_model_id not in profile["models"]:
@@ -237,13 +305,28 @@ def resolve_profile_selection(
 
 
 def public_profile_summary(voice_id: str, profile: dict) -> dict:
+    effective_default = profile["default_model"]
+    try:
+        registry_default = default_model_id(voice_id)
+    except (OSError, ValueError, json.JSONDecodeError):
+        registry_default = None
+    if registry_default:
+        effective_default = next(
+            (
+                alias
+                for alias, item in profile["models"].items()
+                if item.get("model_id") == registry_default
+            ),
+            effective_default,
+        )
+
     return {
         "id": voice_id,
         "name": profile["name"],
         "schema_version": profile["schema_version"],
         "reference_language": profile["references"][profile["default_reference"]]["language"],
         "target_language": profile["target_language"],
-        "default_model": profile["default_model"],
+        "default_model": effective_default,
         "models": [
             {
                 "id": model["id"],
@@ -251,6 +334,9 @@ def public_profile_summary(voice_id: str, profile: dict) -> dict:
                 "engine": model["engine"],
                 "version": model["version"],
                 "managed": model["managed"],
+                "model_id": model.get("model_id"),
+                "revision": model.get("revision"),
+                "status": model.get("status"),
             }
             for model in profile["models"].values()
         ],
