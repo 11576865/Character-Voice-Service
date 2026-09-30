@@ -125,7 +125,11 @@ def root():
     }
 
 
-@app.get("/health/live")\ndef health_live():\n    return {"status": "ok", "service": "character-voice-service"}\n\n\n@app.get("/health")
+@app.get("/health/live")
+def health_live():
+    return {"status": "ok", "service": "character-voice-service"}
+
+@app.get("/health")
 def health():
     engines = []
     for item in list_engines():
