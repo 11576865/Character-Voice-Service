@@ -40,10 +40,14 @@ The sidecar intentionally knows nothing about Character IDs. CVS resolves the
 voice profile and reference audio, then sends the resolved reference path and
 generation parameters to the sidecar.
 
-## Transitional profile binding
+## Shared model and VoiceBinding
 
-Until shared engine models and VoiceBinding are represented by Model Registry
-v1.1, a voice profile may contain a runtime-only model alias:
+Model Registry v1.1 now supports `scope: "shared"` engine models with no
+character owner and, for external runtimes such as IndexTTS, no duplicated
+local model artifacts. Character-specific serving identity is represented by a
+separate VoiceBinding.
+
+Existing runtime-only profile aliases remain accepted as a compatibility bridge:
 
 ```json
 "index-tts-2.5": {
@@ -56,9 +60,23 @@ v1.1, a voice profile may contain a runtime-only model alias:
 }
 ```
 
-Select it with `model_id: "index-tts-2.5"`. This is intentionally a bridge for
-real-machine integration, not the final ownership model. The final architecture
-remains Engine Model + Voice Binding + Reference Assets.
+Select it with `model_id: "index-tts-2.5"`. When a formal VoiceBinding exists,
+the binding takes precedence over the transitional alias and resolves the shared
+engine model plus speaker/emotion reference roles.
+
+Migrate an existing IndexTTS alias after pulling the current main branch:
+
+```cmd
+.venv\Scripts\python.exe scripts\migrate_index_tts_binding.py --voice march-7th
+```
+
+This creates:
+
+- a shared `index-tts-2.5` Model Registry v1.1 manifest;
+- a persistent VoiceBinding for the character;
+- no duplicate IndexTTS checkpoints inside CVS.
+
+The existing profile alias is intentionally retained for rollback compatibility.
 
 ## Residency policy
 
