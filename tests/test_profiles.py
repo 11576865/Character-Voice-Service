@@ -219,3 +219,77 @@ def test_index_tts_inline_binding_rejects_gpt_weight_paths(tmp_path):
 
     with pytest.raises(ValueError, match="does not accept GPT/SoVITS"):
         read_valid_profile(path)
+
+
+def test_formal_voice_binding_overrides_transitional_index_alias(tmp_path, monkeypatch):
+    raw = registry_profile()
+    raw["models"]["index-tts-2.5"] = {
+        "name": "Transitional IndexTTS alias",
+        "engine": "index-tts",
+        "version": "2.5",
+        "parameters": {"emo_alpha": 0.2},
+    }
+    raw["references"]["emotion-01"] = {
+        "name": "Emotion",
+        "audio": "D:/refs/emotion.wav",
+        "text": "Emotional reference.",
+        "language": "en",
+        "emotion": "happy",
+        "roles": ["emotion"],
+    }
+    path = tmp_path / "march-7th.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    profile = read_valid_profile(path)
+
+    binding = {
+        "binding_id": "march-7th-index-tts-2.5",
+        "voice_id": "march-7th",
+        "engine": "index-tts",
+        "model_id": "index-tts-2.5",
+        "speaker_reference_id": "neutral-01",
+        "emotion_reference_id": "emotion-01",
+        "emotion_policy": "separate",
+        "parameters": {"emo_alpha": 0.7},
+        "enabled": True,
+        "revision": "b" * 64,
+    }
+    shared_model = {
+        "model_id": "index-tts-2.5",
+        "scope": "shared",
+        "voice_id": None,
+        "name": "IndexTTS 2.5 shared engine model",
+        "engine": {
+            "name": "index-tts",
+            "engine_version": "2.5",
+            "adapter_api_version": "1",
+        },
+        "artifacts": {},
+        "parameters": {},
+        "revision": "m" * 64,
+        "status": "validated",
+    }
+
+    import server.voice_profiles as profiles_module
+    monkeypatch.setattr(
+        profiles_module,
+        "resolve_binding",
+        lambda voice_id, selector: binding if selector == "index-tts-2.5" else None,
+    )
+    monkeypatch.setattr(profiles_module, "resolve_model", lambda model_id: shared_model)
+
+    selection = resolve_profile_selection(profile, model_id="index-tts-2.5")
+
+    assert selection["selected_binding"]["revision"] == "b" * 64
+    assert selection["selected_model"]["scope"] == "shared"
+    assert selection["selected_model"]["revision"] == "m" * 64
+    assert selection["reference_audio"] == "D:/refs/neutral.wav"
+    assert selection["selected_emotion_reference"]["id"] == "emotion-01"
+    assert selection["parameters"]["emotion_audio"] == "D:/refs/emotion.wav"
+    assert selection["parameters"]["emo_alpha"] == 0.7
+
+
+def test_reference_roles_default_to_speaker(tmp_path):
+    path = tmp_path / "march-7th.json"
+    path.write_text(json.dumps(registry_profile()), encoding="utf-8")
+    profile = read_valid_profile(path)
+    assert profile["references"]["neutral-01"]["roles"] == ["speaker"]
