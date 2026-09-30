@@ -185,3 +185,37 @@ def test_invalid_real_profile_does_not_satisfy_startup_check(tmp_path):
     assert find_valid_profiles(tmp_path) == []
     with pytest.raises(ValueError, match="missing fields"):
         read_valid_profile(tmp_path / "broken.json")
+
+
+def test_index_tts_inline_runtime_binding_is_valid(tmp_path):
+    raw = registry_profile()
+    raw["models"]["index-tts-2.5"] = {
+        "name": "IndexTTS 2.5 shared runtime",
+        "engine": "index-tts",
+        "version": "2.5",
+        "parameters": {"emo_alpha": 1.0},
+    }
+    path = tmp_path / "march-7th.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    profile = read_valid_profile(path)
+    selection = resolve_profile_selection(profile, model_id="index-tts-2.5")
+
+    assert selection["selected_model"]["engine"] == "index-tts"
+    assert selection["selected_model"]["managed"] is False
+    assert selection["reference_audio"] == "D:/refs/neutral.wav"
+
+
+def test_index_tts_inline_binding_rejects_gpt_weight_paths(tmp_path):
+    raw = registry_profile()
+    raw["models"]["broken-index"] = {
+        "name": "Broken IndexTTS binding",
+        "engine": "index-tts",
+        "gpt_weights": "D:/models/not-valid.ckpt",
+        "sovits_weights": "D:/models/not-valid.pth",
+    }
+    path = tmp_path / "broken.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not accept GPT/SoVITS"):
+        read_valid_profile(path)
