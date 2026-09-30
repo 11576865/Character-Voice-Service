@@ -14,7 +14,7 @@ REGISTRY_PATH = DATA_DIR / "model-registry.json"
 MANIFEST_FILENAME = "model.json"
 
 SCHEMA_VERSION = 1
-MANIFEST_SCHEMA_VERSION = "1.0"
+MANIFEST_SCHEMA_VERSIONS = {"1.0", "1.1"}
 LIFECYCLE_STATES = {
     "discovered",
     "candidate",
@@ -100,11 +100,20 @@ def validate_manifest(manifest_path: Path) -> dict:
 
     if not isinstance(raw, dict):
         raise ValueError("model manifest root must be an object")
-    if str(raw.get("schema_version")) != MANIFEST_SCHEMA_VERSION:
+    schema_version = str(raw.get("schema_version"))
+    if schema_version not in MANIFEST_SCHEMA_VERSIONS:
         raise ValueError("unsupported model manifest schema")
 
     model_id = _require_id(raw.get("model_id"), "model_id")
-    voice_id = _require_id(raw.get("voice_id"), "voice_id")
+    scope = str(raw.get("scope") or "voice-bound").strip().lower()
+    if scope not in {"voice-bound", "shared"}:
+        raise ValueError(f"unsupported model scope: {scope}")
+
+    raw_voice_id = str(raw.get("voice_id") or "").strip()
+    if scope == "voice-bound":
+        voice_id = _require_id(raw_voice_id, "voice_id")
+    else:
+        voice_id = _require_id(raw_voice_id, "voice_id") if raw_voice_id else None
 
     engine = raw.get("engine")
     if not isinstance(engine, dict):
@@ -114,8 +123,10 @@ def validate_manifest(manifest_path: Path) -> dict:
     adapter_api_version = str(engine.get("adapter_api_version") or "1").strip()
 
     artifacts = raw.get("artifacts")
-    if not isinstance(artifacts, dict) or not artifacts:
-        raise ValueError("artifacts must be a non-empty object")
+    if not isinstance(artifacts, dict):
+        raise ValueError("artifacts must be an object")
+    if not artifacts and scope != "shared":
+        raise ValueError("artifacts must be a non-empty object for voice-bound models")
 
     resolved_artifacts = {}
     artifact_meta = {}
@@ -162,6 +173,7 @@ def validate_manifest(manifest_path: Path) -> dict:
     manifest_sha256 = sha256_file(manifest_path)
     return {
         "model_id": model_id,
+        "scope": scope,
         "voice_id": voice_id,
         "name": str(raw.get("name") or model_id).strip() or model_id,
         "language": list(raw.get("language") or []),
@@ -217,6 +229,7 @@ def scan_model_root(
             continue
 
         discovered[model_id] = {
+            "scope": model["scope"],
             "voice_id": model["voice_id"],
             "engine": model["engine"]["name"],
             "engine_version": model["engine"]["engine_version"],
@@ -250,6 +263,7 @@ def scan_model_root(
             first_seen = now
 
         registry["models"][model_id] = {
+            "scope": item["scope"],
             "voice_id": item["voice_id"],
             "engine": item["engine"],
             "engine_version": item["engine_version"],
@@ -329,6 +343,7 @@ def list_models(
         entry = registry["models"][model_id]
         item = {
             "model_id": model_id,
+            "scope": entry.get("scope", "voice-bound"),
             "voice_id": entry.get("voice_id"),
             "engine": entry.get("engine"),
             "engine_version": entry.get("engine_version"),
@@ -395,6 +410,8 @@ def promote_model(
         if not promotable:
             raise ValueError("model has no promotable validated evaluation")
 
+    if entry.get("scope", "voice-bound") == "shared":
+        raise ValueError("shared models cannot be promoted as a per-voice default")
     voice_id = _require_id(entry.get("voice_id"), "voice_id")
     previous_id = registry.get("defaults", {}).get(voice_id)
     if previous_id and previous_id != model_id:
@@ -412,7 +429,7 @@ def promote_model(
 def retire_model(model_id: str, *, registry_path: Path = REGISTRY_PATH) -> None:
     registry, entry = _entry(model_id, registry_path)
     voice_id = entry.get("voice_id")
-    if registry.get("defaults", {}).get(voice_id) == model_id:
+    if voice_id and registry.get("defaults", {}).get(voice_id) == model_id:
         raise ValueError("cannot retire the current default model before promoting another model")
     entry["status"] = "retired"
     entry["updated_at"] = _now_iso()
