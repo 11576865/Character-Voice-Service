@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 from server.model_registry import default_model_id, resolve_model
-from server.voice_bindings import resolve_binding
+from server.voice_bindings import list_bindings, resolve_binding
 
 
 TEMPLATE_FILENAME = "example.json"
@@ -367,6 +367,10 @@ def resolve_profile_selection(
 def public_profile_summary(voice_id: str, profile: dict) -> dict:
     effective_default = profile["default_model"]
     try:
+        bindings = list_bindings(voice_id)
+    except (OSError, ValueError, json.JSONDecodeError):
+        bindings = []
+    try:
         registry_default = default_model_id(voice_id)
     except (OSError, ValueError, json.JSONDecodeError):
         registry_default = None
@@ -400,6 +404,18 @@ def public_profile_summary(voice_id: str, profile: dict) -> dict:
                 "status": model.get("status"),
             }
             for model in profile["models"].values()
+        ],
+        "bindings": [
+            {
+                "id": binding["binding_id"],
+                "engine": binding["engine"],
+                "model_id": binding["model_id"],
+                "speaker_reference_id": binding["speaker_reference_id"],
+                "emotion_reference_id": binding.get("emotion_reference_id"),
+                "emotion_policy": binding["emotion_policy"],
+                "revision": binding["revision"],
+            }
+            for binding in bindings
         ],
         "default_reference": profile["default_reference"],
         "references": [
