@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 from server.model_registry import default_model_id, resolve_model
+from server.voice_bindings import resolve_binding
 
 
 TEMPLATE_FILENAME = "example.json"
@@ -74,6 +75,8 @@ def _normalize_model(model_id: str, raw: object) -> dict:
             "engine": engine,
             "version": str(raw.get("version") or engine_version).strip(),
             "revision": resolved.get("revision"),
+            "scope": resolved.get("scope", "voice-bound"),
+            "adapter_api_version": resolved.get("engine", {}).get("adapter_api_version", "1"),
             "status": resolved.get("status"),
             "gpt_weights": gpt_weights,
             "sovits_weights": sovits_weights,
@@ -102,6 +105,8 @@ def _normalize_model(model_id: str, raw: object) -> dict:
         "engine": engine,
         "version": str(raw.get("version") or "").strip(),
         "revision": None,
+        "scope": "shared" if engine == "index-tts" else "voice-bound",
+        "adapter_api_version": "1",
         "status": None,
         "gpt_weights": explicit_gpt or None,
         "sovits_weights": explicit_sovits or None,
@@ -145,6 +150,16 @@ def _normalize_reference(reference_id: str, raw: object) -> dict:
     if not isinstance(parameters, dict):
         raise ValueError(f"reference {reference_id}: parameters must be an object")
 
+    roles = raw.get("roles")
+    if roles is None:
+        role = str(raw.get("role") or "").strip()
+        roles = [role] if role else ["speaker"]
+    if not isinstance(roles, list) or not roles or any(
+        not isinstance(item, str) or not item.strip() for item in roles
+    ):
+        raise ValueError(f"reference {reference_id}: roles must be a non-empty string list")
+    roles = sorted({item.strip().lower() for item in roles})
+
     return {
         "id": reference_id,
         "name": str(raw.get("name") or reference_id).strip() or reference_id,
@@ -155,6 +170,7 @@ def _normalize_reference(reference_id: str, raw: object) -> dict:
         "emotion": str(raw.get("emotion") or "").strip(),
         "intensity": intensity,
         "quality": str(raw.get("quality") or "").strip(),
+        "roles": roles,
         "parameters": dict(parameters),
     }
 
@@ -260,13 +276,13 @@ def resolve_profile_selection(
     model_id: str | None = None,
     reference_id: str | None = None,
 ) -> dict:
+    voice_id = str(profile.get("_voice_id") or "").strip() or None
     selected_model_id = model_id
     if selected_model_id is None:
         registry_default = None
-        voice_id = profile.get("_voice_id")
         if voice_id:
             try:
-                registry_default = default_model_id(str(voice_id))
+                registry_default = default_model_id(voice_id)
             except (OSError, ValueError, json.JSONDecodeError):
                 registry_default = None
         if registry_default:
@@ -280,17 +296,57 @@ def resolve_profile_selection(
             )
         selected_model_id = selected_model_id or profile["default_model"]
 
-    selected_reference_id = reference_id or profile["default_reference"]
+    binding = None
+    if voice_id and selected_model_id:
+        try:
+            binding = resolve_binding(voice_id, selector=str(selected_model_id))
+        except (OSError, json.JSONDecodeError):
+            binding = None
 
-    if selected_model_id not in profile["models"]:
-        raise KeyError(f"model not found: {selected_model_id}")
+    if binding is not None:
+        resolved = resolve_model(binding["model_id"])
+        engine = resolved["engine"]["name"]
+        artifacts = resolved.get("artifacts") or {}
+        model = {
+            "id": selected_model_id,
+            "model_id": resolved["model_id"],
+            "name": resolved["name"],
+            "engine": engine,
+            "version": resolved["engine"]["engine_version"],
+            "revision": resolved["revision"],
+            "scope": resolved.get("scope", "shared"),
+            "adapter_api_version": resolved["engine"].get("adapter_api_version", "1"),
+            "status": resolved.get("status"),
+            "gpt_weights": artifacts.get("gpt") if engine == "gpt-sovits" else None,
+            "sovits_weights": artifacts.get("sovits") if engine == "gpt-sovits" else None,
+            "managed": True,
+            "parameters": dict(resolved.get("parameters") or {}),
+        }
+        selected_reference_id = reference_id or binding["speaker_reference_id"]
+    else:
+        if selected_model_id not in profile["models"]:
+            raise KeyError(f"model not found: {selected_model_id}")
+        model = profile["models"][selected_model_id]
+        selected_reference_id = reference_id or profile["default_reference"]
+
     if selected_reference_id not in profile["references"]:
         raise KeyError(f"reference not found: {selected_reference_id}")
 
-    model = profile["models"][selected_model_id]
     reference = profile["references"][selected_reference_id]
+    emotion_reference = None
     parameters = dict(profile.get("parameters") or {})
     parameters.update(model.get("parameters") or {})
+
+    if binding is not None:
+        parameters.update(binding.get("parameters") or {})
+        emotion_reference_id = binding.get("emotion_reference_id")
+        if emotion_reference_id:
+            if emotion_reference_id not in profile["references"]:
+                raise KeyError(f"reference not found: {emotion_reference_id}")
+            emotion_reference = profile["references"][emotion_reference_id]
+        if binding.get("emotion_policy") == "separate" and emotion_reference is not None:
+            parameters["emotion_audio"] = emotion_reference["audio"]
+
     parameters.update(reference.get("parameters") or {})
 
     return {
@@ -303,6 +359,8 @@ def resolve_profile_selection(
         "aux_reference_audio": list(reference.get("aux_audio") or []),
         "selected_model": dict(model),
         "selected_reference": dict(reference),
+        "selected_emotion_reference": dict(emotion_reference) if emotion_reference else None,
+        "selected_binding": dict(binding) if binding else None,
     }
 
 
@@ -338,6 +396,7 @@ def public_profile_summary(voice_id: str, profile: dict) -> dict:
                 "managed": model["managed"],
                 "model_id": model.get("model_id"),
                 "revision": model.get("revision"),
+                "scope": model.get("scope", "voice-bound"),
                 "status": model.get("status"),
             }
             for model in profile["models"].values()
@@ -351,6 +410,7 @@ def public_profile_summary(voice_id: str, profile: dict) -> dict:
                 "emotion": reference["emotion"],
                 "intensity": reference["intensity"],
                 "quality": reference["quality"],
+                "roles": reference.get("roles", ["speaker"]),
             }
             for reference in profile["references"].values()
         ],
