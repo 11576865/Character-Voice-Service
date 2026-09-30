@@ -13,7 +13,13 @@ from pydantic import BaseModel
 from server.config import ADMIN_TOKEN, HOST, PORT, SAVE_DIR, SAVE_GENERATED_WAV, VOICE_DIR
 from server.emotion_router import choose_reference
 from server.engines import get_adapter, list_engines, synthesize
-from server.model_registry import list_models, promote_model, retire_model, scan_model_root
+from server.model_registry import (
+    list_models,
+    promote_model,
+    retire_model,
+    scan_model_root,
+    sha256_file,
+)
 from server.voice_profiles import (
     iter_real_profile_paths,
     public_profile_summary,
@@ -54,6 +60,41 @@ def load_voice_profile(name: str) -> dict:
         raise HTTPException(status_code=500, detail=f"Invalid voice profile JSON: {name}") from exc
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=500, detail=f"Invalid voice profile {name}: {exc}") from exc
+
+
+def _reference_revision(reference: dict | None) -> str | None:
+    if not reference:
+        return None
+    path = Path(str(reference.get("audio") or ""))
+    if path.is_file():
+        return sha256_file(path)
+    fallback = {
+        "id": reference.get("id"),
+        "text": reference.get("text"),
+        "language": reference.get("language"),
+    }
+    return hashlib.sha256(
+        json.dumps(
+            fallback,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _revision_parameters(parameters: dict) -> dict:
+    path_keys = {
+        "emotion_audio",
+        "emo_audio_prompt",
+        "speaker_audio",
+        "reference_audio",
+    }
+    return {
+        key: value
+        for key, value in parameters.items()
+        if key not in path_keys
+    }
 
 
 def save_wav(audio: bytes) -> Path | None:
@@ -201,17 +242,32 @@ def speech(request: SpeechRequest):
     request_id = uuid.uuid4().hex
     model_identity = selected_model.get("model_id") or selected_model["id"]
     revision = selected_model.get("revision")
+    binding = selection.get("selected_binding")
+    emotion_reference = selection.get("selected_emotion_reference")
     generation_revision = hashlib.sha256(
         json.dumps(
             {
                 "voice": request.voice,
+                "engine": selected_engine,
+                "adapter_api_version": selected_model.get("adapter_api_version", "1"),
                 "model_id": model_identity,
                 "model_revision": revision,
-                "reference_id": selection["selected_reference"]["id"],
+                "binding_revision": binding.get("revision") if binding else None,
+                "speaker_reference_id": selection["selected_reference"]["id"],
+                "speaker_reference_revision": _reference_revision(
+                    selection["selected_reference"]
+                ),
+                "emotion_reference_id": (
+                    emotion_reference.get("id") if emotion_reference else None
+                ),
+                "emotion_reference_revision": _reference_revision(emotion_reference),
+                "emotion_policy": binding.get("emotion_policy") if binding else None,
+                "parameters": _revision_parameters(selection.get("parameters") or {}),
                 "speed": request.speed,
             },
             sort_keys=True,
             ensure_ascii=False,
+            separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
 
@@ -226,6 +282,9 @@ def speech(request: SpeechRequest):
     }
     if revision:
         headers["X-CVS-Model-Revision"] = str(revision)
+    if binding:
+        headers["X-CVS-Binding"] = str(binding["binding_id"])
+        headers["X-CVS-Binding-Revision"] = str(binding["revision"])
     if saved_path is not None:
         headers["X-Generated-Filename"] = saved_path.name
 
