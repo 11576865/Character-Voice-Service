@@ -1,8 +1,10 @@
 from server.engines.gpt_sovits import GPTSoVITSAdapter
+from server.engines.index_tts import IndexTTSAdapter
 
 
 _ADAPTERS = {
     "gpt-sovits": GPTSoVITSAdapter(),
+    "index-tts": IndexTTSAdapter(),
 }
 
 

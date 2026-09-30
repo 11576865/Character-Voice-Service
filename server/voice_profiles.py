@@ -82,13 +82,15 @@ def _normalize_model(model_id: str, raw: object) -> dict:
         }
 
     engine = str(raw.get("engine") or "gpt-sovits").strip().lower()
-    if engine != "gpt-sovits":
+    if engine not in {"gpt-sovits", "index-tts"}:
+        raise ValueError(f"model {model_id}: unsupported engine {engine!r}")
+
+    if engine == "index-tts" and (explicit_gpt or explicit_sovits):
         raise ValueError(
-            f"model {model_id}: legacy inline model only supports gpt-sovits; "
-            "register other engines in Model Root"
+            f"model {model_id}: IndexTTS shared runtime does not accept GPT/SoVITS weight paths"
         )
 
-    if bool(explicit_gpt) != bool(explicit_sovits):
+    if engine == "gpt-sovits" and bool(explicit_gpt) != bool(explicit_sovits):
         raise ValueError(
             f"model {model_id}: gpt_weights and sovits_weights must be configured together"
         )
@@ -103,7 +105,7 @@ def _normalize_model(model_id: str, raw: object) -> dict:
         "status": None,
         "gpt_weights": explicit_gpt or None,
         "sovits_weights": explicit_sovits or None,
-        "managed": bool(explicit_gpt and explicit_sovits),
+        "managed": engine == "gpt-sovits" and bool(explicit_gpt and explicit_sovits),
         "parameters": dict(parameters),
     }
 
