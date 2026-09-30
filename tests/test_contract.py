@@ -134,3 +134,74 @@ def test_speech_routes_to_index_tts_runtime_binding(tmp_path, monkeypatch):
     assert response.headers["x-cvs-engine"] == "index-tts"
     assert response.headers["x-cvs-model"] == "index-tts-2.5"
     assert calls[0]["profile"]["selected_model"]["engine"] == "index-tts"
+
+
+def test_generation_revision_includes_formal_binding_identity(tmp_path, monkeypatch):
+    _write_profile(tmp_path / "march-7th.json")
+    monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "SAVE_GENERATED_WAV", False)
+    monkeypatch.setattr(app_module, "synthesize", lambda **kwargs: b"RIFF....WAVE")
+
+    base_selection = {
+        "name": "March 7th",
+        "target_language": "en",
+        "parameters": {"emo_alpha": 0.7},
+        "reference_audio": "D:/refs/a.wav",
+        "reference_text": "Reference.",
+        "reference_language": "en",
+        "aux_reference_audio": [],
+        "selected_model": {
+            "id": "index-tts-2.5",
+            "model_id": "index-tts-2.5",
+            "engine": "index-tts",
+            "version": "2.5",
+            "revision": "m" * 64,
+            "adapter_api_version": "1",
+        },
+        "selected_reference": {
+            "id": "neutral",
+            "audio": "D:/refs/a.wav",
+            "text": "Reference.",
+            "language": "en",
+        },
+        "selected_emotion_reference": None,
+        "selected_binding": {
+            "binding_id": "march-index",
+            "revision": "a" * 64,
+            "emotion_policy": "speaker",
+        },
+    }
+
+    monkeypatch.setattr(
+        app_module,
+        "resolve_profile_selection",
+        lambda *args, **kwargs: dict(base_selection),
+    )
+    first = client.post("/v1/audio/speech", json={
+        "voice": "march-7th",
+        "model_id": "index-tts-2.5",
+        "input": "Hello",
+    })
+    assert first.status_code == 200
+    assert first.headers["x-cvs-binding"] == "march-index"
+    assert first.headers["x-cvs-binding-revision"] == "a" * 64
+    first_revision = first.headers["x-cvs-generation-revision"]
+
+    changed = dict(base_selection)
+    changed["selected_binding"] = {
+        "binding_id": "march-index",
+        "revision": "b" * 64,
+        "emotion_policy": "speaker",
+    }
+    monkeypatch.setattr(
+        app_module,
+        "resolve_profile_selection",
+        lambda *args, **kwargs: dict(changed),
+    )
+    second = client.post("/v1/audio/speech", json={
+        "voice": "march-7th",
+        "model_id": "index-tts-2.5",
+        "input": "Hello",
+    })
+    assert second.status_code == 200
+    assert second.headers["x-cvs-generation-revision"] != first_revision
