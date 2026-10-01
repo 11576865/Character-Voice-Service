@@ -436,6 +436,8 @@ class RuntimeSupervisor:
                 if spec is None:
                     spec = RuntimeSpec(
                         engine_id=engine_id,
+                        runtime_id=f"{engine_id}-local",
+                        runtime_version=None,
                         enabled=True,
                         mode="managed",
                         executable=None,
