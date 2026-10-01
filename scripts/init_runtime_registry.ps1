@@ -52,6 +52,7 @@ if ($SupervisorConfig -and (Test-Path -LiteralPath $SupervisorConfig -PathType L
     $sup = Get-Content -LiteralPath $SupervisorConfig -Raw -Encoding UTF8 | ConvertFrom-Json
     $supRoot = Split-Path -Parent $SupervisorConfig
     $controlDir = Join-Path $supRoot 'character_voice_supervisor\control\requests'
+    $statusFile = Join-Path $supRoot 'character_voice_supervisor\control\status.json'
 
     $gptSvc = @($sup.services | Where-Object { [string]$_.key -eq 'Api' }) | Select-Object -First 1
     $indexSvc = @($sup.services | Where-Object { [string]$_.key -eq 'IndexTTS' }) | Select-Object -First 1
@@ -83,6 +84,7 @@ if ($SupervisorConfig -and (Test-Path -LiteralPath $SupervisorConfig -PathType L
                     external_control = [ordered]@{
                         mode = 'file'
                         request_dir = $controlDir
+                        status_file = $statusFile
                         service_key = 'Api'
                     }
                 }
@@ -112,6 +114,7 @@ if ($SupervisorConfig -and (Test-Path -LiteralPath $SupervisorConfig -PathType L
                     external_control = [ordered]@{
                         mode = 'file'
                         request_dir = $controlDir
+                        status_file = $statusFile
                         service_key = 'IndexTTS'
                     }
                 }
