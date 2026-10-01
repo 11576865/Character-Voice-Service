@@ -22,7 +22,9 @@ def _admin_token() -> str:
 
 ADMIN_TOKEN = _admin_token()
 
-GPT_SOVITS_BASE_URL = "http://127.0.0.1:9880"
+GPT_SOVITS_BASE_URL = os.environ.get(
+    "CVS_GPT_SOVITS_BASE_URL", "http://127.0.0.1:9880"
+).rstrip("/")
 GPT_SOVITS_TTS_URL = f"{GPT_SOVITS_BASE_URL}/tts"
 GPT_SOVITS_HEALTH_URL = f"{GPT_SOVITS_BASE_URL}/docs"
 GPT_SOVITS_SET_GPT_WEIGHTS_URL = f"{GPT_SOVITS_BASE_URL}/set_gpt_weights"
