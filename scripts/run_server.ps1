@@ -13,8 +13,12 @@ if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
 
 if (-not (Test-Path -LiteralPath $runtimeRegistry -PathType Leaf)) {
     Write-Host "Runtime Registry not found. Creating machine-local configuration..." -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot 'init_runtime_registry.ps1')
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    try {
+        & (Join-Path $PSScriptRoot 'init_runtime_registry.ps1')
+    } catch {
+        Write-Host ("ERROR: Runtime Registry initialization failed: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        exit 1
+    }
 }
 
 Push-Location $projectRoot
