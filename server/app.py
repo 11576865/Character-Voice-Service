@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from server.config import ADMIN_TOKEN, HOST, PORT, SAVE_DIR, SAVE_GENERATED_WAV, VOICE_DIR
 from server.emotion_router import choose_reference
 from server.engines import get_adapter, list_engines, synthesize
+from server.engine_registry import load_engine_descriptors
 from server.model_registry import (
     list_models,
     promote_model,
@@ -21,6 +22,7 @@ from server.model_registry import (
     scan_model_root,
     sha256_file,
 )
+from server.reconciliation import reconcile_system
 from server.runtime_registry import load_runtime_registry
 from server.runtime_supervisor import (
     RuntimeConflictError,
@@ -131,6 +133,7 @@ def root():
         "engines": "/v1/engines",
         "runtime": "/v1/runtime",
         "system_graph": "/v1/system/graph",
+        "system_reconcile": "/v1/system/reconcile",
         "speech": "/v1/audio/speech",
         "docs": "/docs",
     }
@@ -153,6 +156,20 @@ def health():
 @app.get("/v1/engines")
 def engines():
     return {"engines": list_engines()}
+
+
+@app.get("/v1/engine-registry", dependencies=[Depends(require_admin)])
+def engine_registry():
+    try:
+        return {
+            "schema_version": 1,
+            "engines": [
+                descriptor.public()
+                for _, descriptor in sorted(load_engine_descriptors().items())
+            ],
+        }
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Engine Registry error: {exc}") from exc
 
 
 @app.get("/v1/runtime", dependencies=[Depends(require_admin)])
@@ -179,6 +196,14 @@ def system_voice_trace(voice_id: str):
         raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail=f"System Graph error: {exc}") from exc
+
+
+@app.get("/v1/system/reconcile", dependencies=[Depends(require_admin)])
+def system_reconcile():
+    try:
+        return reconcile_system()
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"System reconciliation error: {exc}") from exc
 
 
 @app.post("/v1/admin/runtime/{engine_id}/start", dependencies=[Depends(require_admin)])
