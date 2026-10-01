@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from server.config import ADMIN_TOKEN, HOST, PORT, SAVE_DIR, SAVE_GENERATED_WAV, VOICE_DIR
 from server.emotion_router import choose_reference
 from server.engines import get_adapter, list_engines, synthesize
+from server.runtime_supervisor import RuntimeSupervisorError, runtime_supervisor
 from server.model_registry import (
     list_models,
     promote_model,
@@ -125,6 +126,7 @@ def root():
         "voices": "/v1/voices",
         "models": "/v1/models",
         "engines": "/v1/engines",
+        "runtime": "/v1/runtime",
         "speech": "/v1/audio/speech",
         "runtime": "/v1/runtime",
         "docs": "/docs",
@@ -148,6 +150,38 @@ def health():
 @app.get("/v1/engines")
 def engines():
     return {"engines": list_engines()}
+
+
+@app.get("/v1/runtime")
+def runtime_info():
+    try:
+        return runtime_supervisor.diagnostics()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"Runtime Registry error: {exc}") from exc
+
+
+@app.post("/v1/admin/runtime/{engine_id}/start", dependencies=[Depends(require_admin)])
+def runtime_start(engine_id: str):
+    try:
+        return runtime_supervisor.start(engine_id)
+    except (RuntimeSupervisorError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/v1/admin/runtime/{engine_id}/stop", dependencies=[Depends(require_admin)])
+def runtime_stop(engine_id: str):
+    try:
+        return runtime_supervisor.stop(engine_id)
+    except (RuntimeSupervisorError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/v1/admin/runtime/{engine_id}/restart", dependencies=[Depends(require_admin)])
+def runtime_restart(engine_id: str):
+    try:
+        return runtime_supervisor.restart(engine_id)
+    except (RuntimeSupervisorError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/v1/runtime")
