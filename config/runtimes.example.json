@@ -4,38 +4,40 @@
     "gpt-sovits": {
       "enabled": false,
       "mode": "managed",
-      "executable": "D:\\BaiduNetdiskDownload\\GPT-SoVITS-env\\python.exe",
-      "cwd": "D:\\BaiduNetdiskDownload\\GPT-SoVITS",
+      "executable": "D:\\AI\\GPT-SoVITS-env\\python.exe",
+      "cwd": "D:\\AI\\GPT-SoVITS",
       "args": [
         "api_v2.py",
         "-a",
         "127.0.0.1",
         "-p",
-        "9880"
+        "9880",
+        "-c",
+        "GPT_SoVITS/configs/tts_infer.yaml"
       ],
       "endpoint": "http://127.0.0.1:9880",
       "health_url": "http://127.0.0.1:9880/docs",
       "start_on_demand": true,
-      "exclusive_group": "gpu0",
-      "startup_timeout": 120,
-      "shutdown_timeout": 15,
+      "exclusive_group": "gpu-0",
+      "startup_timeout": 180,
+      "shutdown_timeout": 20,
       "env": {},
       "path_prepend": []
     },
     "index-tts": {
       "enabled": false,
       "mode": "managed",
-      "executable": "D:\\index-tts\\.venv\\Scripts\\python.exe",
-      "cwd": "D:\\index-tts",
+      "executable": "D:\\AI\\index-tts\\.venv\\Scripts\\python.exe",
+      "cwd": "D:\\AI\\index-tts",
       "args": [
-        "D:\\Character-Voice-Service\\sidecars\\index_tts_api.py"
+        "D:\\AI\\Character-Voice-Service\\sidecars\\index_tts_api.py"
       ],
       "endpoint": "http://127.0.0.1:9882",
       "health_url": "http://127.0.0.1:9882/health",
       "start_on_demand": true,
-      "exclusive_group": "gpu0",
-      "startup_timeout": 180,
-      "shutdown_timeout": 15,
+      "exclusive_group": "gpu-0",
+      "startup_timeout": 240,
+      "shutdown_timeout": 20,
       "env": {
         "INDEX_TTS_HOST": "127.0.0.1",
         "INDEX_TTS_PORT": "9882",
