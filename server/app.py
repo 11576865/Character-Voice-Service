@@ -108,6 +108,105 @@ def _revision_parameters(parameters: dict) -> dict:
     }
 
 
+def _resolve_speech_selection(request: SpeechRequest) -> dict:
+    if not request.input.strip():
+        raise HTTPException(status_code=400, detail="input cannot be empty")
+    if request.response_format != "wav":
+        raise HTTPException(status_code=400, detail="current version supports WAV only")
+    if request.speed <= 0:
+        raise HTTPException(status_code=400, detail="speed must be greater than 0")
+
+    profile = load_voice_profile(request.voice)
+    reference_id = request.reference_id
+    selection_reason = "manual" if reference_id else "default"
+    if reference_id == "auto":
+        reference_id, selection_reason = choose_reference(profile, request.input)
+
+    try:
+        selection = resolve_profile_selection(
+            profile, model_id=request.model_id, reference_id=reference_id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+
+    selected_model = selection["selected_model"]
+    selected_engine = str(selected_model.get("engine") or "gpt-sovits")
+    if request.model and request.model not in {
+        selected_engine,
+        selected_model.get("id"),
+        selected_model.get("model_id"),
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail="model field no longer selects the inference engine; use model_id",
+        )
+
+    return {
+        "selection": selection,
+        "selection_reason": selection_reason,
+        "selected_model": selected_model,
+        "selected_engine": selected_engine,
+    }
+
+
+def _generation_provenance(request: SpeechRequest, resolved: dict) -> dict:
+    selection = resolved["selection"]
+    selected_model = resolved["selected_model"]
+    selected_engine = resolved["selected_engine"]
+
+    runtime_spec = load_runtime_registry().get(selected_engine)
+    runtime_identity = runtime_spec.runtime_id if runtime_spec else None
+    runtime_revision = runtime_spec.configuration_revision if runtime_spec else None
+
+    model_identity = selected_model.get("model_id") or selected_model["id"]
+    model_revision = selected_model.get("revision")
+    binding = selection.get("selected_binding")
+    emotion_reference = selection.get("selected_emotion_reference")
+
+    generation_revision = hashlib.sha256(
+        json.dumps(
+            {
+                "voice": request.voice,
+                "engine": selected_engine,
+                "runtime_id": runtime_identity,
+                "runtime_revision": runtime_revision,
+                "adapter_api_version": selected_model.get("adapter_api_version", "1"),
+                "model_id": model_identity,
+                "model_revision": model_revision,
+                "binding_revision": binding.get("revision") if binding else None,
+                "speaker_reference_id": selection["selected_reference"]["id"],
+                "speaker_reference_revision": _reference_revision(
+                    selection["selected_reference"]
+                ),
+                "emotion_reference_id": (
+                    emotion_reference.get("id") if emotion_reference else None
+                ),
+                "emotion_reference_revision": _reference_revision(emotion_reference),
+                "emotion_policy": binding.get("emotion_policy") if binding else None,
+                "parameters": _revision_parameters(selection.get("parameters") or {}),
+                "speed": request.speed,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    return {
+        "voice": request.voice,
+        "model": str(model_identity),
+        "model_revision": model_revision,
+        "engine": selected_engine,
+        "runtime": runtime_identity,
+        "runtime_revision": runtime_revision,
+        "binding": binding.get("binding_id") if binding else None,
+        "binding_revision": binding.get("revision") if binding else None,
+        "reference": selection["selected_reference"]["id"],
+        "reference_reason": resolved["selection_reason"],
+        "generation_revision": generation_revision,
+    }
+
+
 def save_wav(audio: bytes) -> Path | None:
     if not SAVE_GENERATED_WAV:
         return None
@@ -135,6 +234,7 @@ def root():
         "system_graph": "/v1/system/graph",
         "system_reconcile": "/v1/system/reconcile",
         "speech": "/v1/audio/speech",
+        "speech_resolve": "/v1/audio/resolve",
         "docs": "/docs",
     }
 
@@ -302,39 +402,18 @@ def reference_audio(voice_id: str, reference_id: str):
     return FileResponse(path, media_type="audio/wav")
 
 
+@app.post("/v1/audio/resolve")
+def resolve_speech(request: SpeechRequest):
+    resolved = _resolve_speech_selection(request)
+    return _generation_provenance(request, resolved)
+
+
 @app.post("/v1/audio/speech")
 def speech(request: SpeechRequest):
-    if not request.input.strip():
-        raise HTTPException(status_code=400, detail="input cannot be empty")
-    if request.response_format != "wav":
-        raise HTTPException(status_code=400, detail="current version supports WAV only")
-    if request.speed <= 0:
-        raise HTTPException(status_code=400, detail="speed must be greater than 0")
-
-    profile = load_voice_profile(request.voice)
-    reference_id = request.reference_id
-    selection_reason = "manual" if reference_id else "default"
-    if reference_id == "auto":
-        reference_id, selection_reason = choose_reference(profile, request.input)
-
-    try:
-        selection = resolve_profile_selection(
-            profile, model_id=request.model_id, reference_id=reference_id
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
-
-    selected_model = selection["selected_model"]
-    selected_engine = str(selected_model.get("engine") or "gpt-sovits")
-    if request.model and request.model not in {
-        selected_engine,
-        selected_model.get("id"),
-        selected_model.get("model_id"),
-    }:
-        raise HTTPException(
-            status_code=400,
-            detail="model field no longer selects the inference engine; use model_id",
-        )
+    resolved = _resolve_speech_selection(request)
+    selection = resolved["selection"]
+    selected_model = resolved["selected_model"]
+    selected_engine = resolved["selected_engine"]
 
     try:
         runtime_supervisor.ensure_ready(selected_engine)
@@ -343,65 +422,30 @@ def speech(request: SpeechRequest):
     except RuntimeSupervisorError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    runtime_spec = load_runtime_registry().get(selected_engine)
-    runtime_identity = runtime_spec.runtime_id if runtime_spec else None
-    runtime_revision = runtime_spec.configuration_revision if runtime_spec else None
-
+    provenance = _generation_provenance(request, resolved)
     audio = synthesize(text=request.input, speed=request.speed, profile=selection)
     saved_path = save_wav(audio)
 
     request_id = uuid.uuid4().hex
-    model_identity = selected_model.get("model_id") or selected_model["id"]
-    revision = selected_model.get("revision")
-    binding = selection.get("selected_binding")
-    emotion_reference = selection.get("selected_emotion_reference")
-    generation_revision = hashlib.sha256(
-        json.dumps(
-            {
-                "voice": request.voice,
-                "engine": selected_engine,
-                "runtime_id": runtime_identity,
-                "runtime_revision": runtime_revision,
-                "adapter_api_version": selected_model.get("adapter_api_version", "1"),
-                "model_id": model_identity,
-                "model_revision": revision,
-                "binding_revision": binding.get("revision") if binding else None,
-                "speaker_reference_id": selection["selected_reference"]["id"],
-                "speaker_reference_revision": _reference_revision(
-                    selection["selected_reference"]
-                ),
-                "emotion_reference_id": (
-                    emotion_reference.get("id") if emotion_reference else None
-                ),
-                "emotion_reference_revision": _reference_revision(emotion_reference),
-                "emotion_policy": binding.get("emotion_policy") if binding else None,
-                "parameters": _revision_parameters(selection.get("parameters") or {}),
-                "speed": request.speed,
-            },
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-
     headers = {
         "X-CVS-Request-ID": request_id,
-        "X-CVS-Voice": request.voice,
-        "X-CVS-Model": str(model_identity),
-        "X-CVS-Engine": selected_engine,
-        "X-CVS-Generation-Revision": generation_revision,
-        "X-Selected-Reference": selection["selected_reference"]["id"],
-        "X-Reference-Reason": selection_reason,
+        "X-CVS-Voice": provenance["voice"],
+        "X-CVS-Model": provenance["model"],
+        "X-CVS-Engine": provenance["engine"],
+        "X-CVS-Generation-Revision": provenance["generation_revision"],
+        "X-Selected-Reference": provenance["reference"],
+        "X-Reference-Reason": provenance["reference_reason"],
     }
-    if runtime_identity:
-        headers["X-CVS-Runtime"] = str(runtime_identity)
-    if runtime_revision:
-        headers["X-CVS-Runtime-Revision"] = str(runtime_revision)
-    if revision:
-        headers["X-CVS-Model-Revision"] = str(revision)
-    if binding:
-        headers["X-CVS-Binding"] = str(binding["binding_id"])
-        headers["X-CVS-Binding-Revision"] = str(binding["revision"])
+    if provenance["runtime"]:
+        headers["X-CVS-Runtime"] = str(provenance["runtime"])
+    if provenance["runtime_revision"]:
+        headers["X-CVS-Runtime-Revision"] = str(provenance["runtime_revision"])
+    if provenance["model_revision"]:
+        headers["X-CVS-Model-Revision"] = str(provenance["model_revision"])
+    if provenance["binding"]:
+        headers["X-CVS-Binding"] = str(provenance["binding"])
+    if provenance["binding_revision"]:
+        headers["X-CVS-Binding-Revision"] = str(provenance["binding_revision"])
     if saved_path is not None:
         headers["X-Generated-Filename"] = saved_path.name
 
