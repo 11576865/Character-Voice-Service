@@ -216,6 +216,9 @@ def test_runtime_endpoint_exposes_supervisor_diagnostics(monkeypatch):
             "runtimes": [],
         },
     )
-    response = client.get("/v1/runtime")
+    response = client.get(
+        "/v1/runtime",
+        headers={"X-CVS-Token": app_module.ADMIN_TOKEN},
+    )
     assert response.status_code == 200
     assert response.json()["registry"]["schema_version"] == 1
