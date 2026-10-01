@@ -32,3 +32,6 @@ voices/*.bak
 .idea/
 .DS_Store
 Thumbs.db
+
+# Machine-local Runtime Registry
+config/runtimes.local.json
