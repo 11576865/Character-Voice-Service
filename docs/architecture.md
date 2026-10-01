@@ -109,3 +109,10 @@ POST /v1/admin/runtime/{engine_id}/restart
 ```
 
 当 `/v1/audio/speech` 选择了一个已注册且设置 `start_on_demand: true` 的引擎时，CVS 会在合成前确保该 sidecar 已健康；未注册的旧式手工运行方式仍保留兼容。
+
+
+## System Graph
+
+系统整合以稳定身份、所有权和依赖关系为准，不以文件系统共址为准。Character / Reference、VoiceBinding、Model、Engine、Runtime、Runtime Dependency、Lifecycle Owner 和 GPU Resource 被连接为一张可查询关系图。
+
+详细说明见 [System Graph](system-graph.md)。
