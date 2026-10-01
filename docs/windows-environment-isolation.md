@@ -72,3 +72,51 @@ Character Voice Service (.venv)
 - 不把引擎自己的 FFmpeg/DLL 路径永久写入系统环境变量。
 
 这样可以避免一个语音项目安装的旧 FFmpeg 或 DLL 影响字幕压制器、其他语音引擎和普通终端。
+
+
+## Runtime Registry
+
+CVS 现在使用机器本地 Runtime Registry：`config\runtimes.local.json`。这个文件记录每个 TTS 引擎的实际运行环境，例如 Python / 可执行文件绝对路径、工作目录、启动参数、HTTP endpoint、health URL、按需启动策略、GPU 互斥组、启停超时和引擎私有环境变量。
+
+这里的 registry 不是 Windows Registry，不写入 `HKEY_CURRENT_USER` 或 `HKEY_LOCAL_MACHINE`。它只是一个按 engine ID 登记运行时信息的本地 JSON 注册表。
+
+首次生成：
+
+```powershell
+.\scripts\init_runtime_registry.ps1
+```
+
+脚本会尝试发现 sibling `GPT-SoVITS`、`GPT-SoVITS-env`、`index-tts` 以及相关环境变量。自动发现不完整时可显式指定：
+
+```powershell
+.\scripts\init_runtime_registry.ps1 `
+  -GptRoot "D:\path\to\GPT-SoVITS" `
+  -GptPython "D:\path\to\GPT-SoVITS-env\python.exe" `
+  -IndexRoot "D:\path\to\index-tts" `
+  -IndexPython "D:\path\to\index-tts\.venv\Scripts\python.exe" `
+  -Force
+```
+
+`config\runtimes.local.json` 已加入 `.gitignore`，机器路径不会提交到仓库。仓库中的 `config\runtimes.example.json` 只是模板。
+
+## Runtime Supervisor
+
+CVS 进程内的 Runtime Supervisor 负责引擎进程生命周期。收到推理请求时，它查询 Runtime Registry；如果引擎健康则直接使用，如果 `start_on_demand: true` 且引擎未运行，则用登记的绝对路径启动。启动时会移除父进程继承的 `CONDA_PREFIX`、`CONDA_DEFAULT_ENV`、`PYTHONPATH` 等污染，并重建以该引擎环境为优先的 PATH。
+
+同一 `exclusive_group` 中若已有 Supervisor 自己启动的另一引擎，则会先停止旧引擎再启动新引擎。若冲突进程是用户手工启动、Supervisor 并不拥有，则不会强杀，而是明确拒绝并要求用户处理。
+
+诊断：
+
+```http
+GET /v1/runtime
+```
+
+管理接口需要 `X-CVS-Token`：
+
+```http
+POST /v1/admin/runtime/gpt-sovits/start
+POST /v1/admin/runtime/gpt-sovits/stop
+POST /v1/admin/runtime/gpt-sovits/restart
+```
+
+IndexTTS 同理，将 `gpt-sovits` 改为 `index-tts`。
