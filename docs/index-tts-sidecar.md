@@ -5,7 +5,8 @@ putting IndexTTS dependencies into the Character Voice Service environment.
 
 ## Runtime boundary
 
-- IndexTTS checkout/environment: external to CVS
+- IndexTTS checkout/environment: external to CVS, using its own `.venv`
+- launcher calls `INDEX_TTS_ROOT\.venv\Scripts\python.exe` by absolute path; the active shell's Conda/Python environment is not authoritative
 - sidecar: `127.0.0.1:9882`
 - CVS: `127.0.0.1:9881`
 - Reader continues to call CVS only
@@ -83,3 +84,8 @@ The existing profile alias is intentionally retained for rollback compatibility.
 IndexTTS is not added to the Supervisor in this change. On 12 GB GPUs it should
 be treated as mutually exclusive with GPT-SoVITS until an explicit residency
 policy is implemented and validated.
+
+
+## Windows PATH / Conda note
+
+Do not install IndexTTS dependencies into Conda `base` and do not rely on an activated `base` environment to launch the sidecar. Use the repository launcher above. For diagnostics, run `scripts\environment_doctor.ps1` from Character Voice Service. This keeps TTS Python environments independent from system FFmpeg and from unrelated video tools.
