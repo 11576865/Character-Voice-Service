@@ -205,3 +205,17 @@ def test_generation_revision_includes_formal_binding_identity(tmp_path, monkeypa
     })
     assert second.status_code == 200
     assert second.headers["x-cvs-generation-revision"] != first_revision
+
+
+def test_runtime_endpoint_exposes_supervisor_diagnostics(monkeypatch):
+    monkeypatch.setattr(
+        app_module.runtime_supervisor,
+        "diagnostics",
+        lambda: {
+            "registry": {"exists": True, "schema_version": 1, "engines": []},
+            "runtimes": [],
+        },
+    )
+    response = client.get("/v1/runtime")
+    assert response.status_code == 200
+    assert response.json()["registry"]["schema_version"] == 1
