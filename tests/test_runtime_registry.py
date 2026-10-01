@@ -90,3 +90,32 @@ def test_registry_accepts_utf8_bom(tmp_path):
     registry = load_runtime_registry(path)
     assert registry.schema_version == 1
     assert registry.runtimes == {}
+
+
+def test_external_runtime_parses_supervisor_control_bridge(tmp_path):
+    path = tmp_path / "runtimes.json"
+    write_registry(
+        path,
+        {
+            "index-tts": {
+                "enabled": True,
+                "mode": "external",
+                "lifecycle_owner": "system-supervisor",
+                "health_url": "http://127.0.0.1:9882/health",
+                "endpoint": "http://127.0.0.1:9882",
+                "start_on_demand": True,
+                "exclusive_group": "gpu-0",
+                "external_control": {
+                    "mode": "file",
+                    "request_dir": str(tmp_path / "control" / "requests"),
+                    "service_key": "IndexTTS",
+                },
+            }
+        },
+    )
+    spec = load_runtime_registry(path).get("index-tts")
+    assert spec is not None
+    assert spec.managed is False
+    assert spec.lifecycle_owner == "system-supervisor"
+    assert spec.external_control["mode"] == "file"
+    assert spec.external_control["service_key"] == "IndexTTS"
