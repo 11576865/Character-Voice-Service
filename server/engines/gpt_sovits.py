@@ -1,7 +1,8 @@
 import urllib.request
 
 from server.backends import gpt_sovits
-from server.config import GPT_SOVITS_HEALTH_URL
+from server.config import GPT_SOVITS_BASE_URL
+from server.runtime_registry import runtime_base_url
 
 
 class GPTSoVITSAdapter:
@@ -25,7 +26,8 @@ class GPTSoVITSAdapter:
 
     def health(self) -> dict:
         try:
-            urllib.request.urlopen(GPT_SOVITS_HEALTH_URL, timeout=2)
+            health_url = runtime_base_url("gpt-sovits", GPT_SOVITS_BASE_URL) + "/docs"
+            urllib.request.urlopen(health_url, timeout=2)
             return {"status": "ready"}
         except Exception as exc:
             return {"status": "offline", "error": str(exc)}
