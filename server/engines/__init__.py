@@ -1,5 +1,6 @@
 from server.engines.gpt_sovits import GPTSoVITSAdapter
 from server.engines.index_tts import IndexTTSAdapter
+from server.runtime_supervisor import runtime_supervisor
 
 
 _ADAPTERS = {
@@ -25,4 +26,5 @@ def list_engines() -> list[dict]:
 def synthesize(text: str, speed: float, profile: dict) -> bytes:
     model = profile.get("selected_model") or {}
     engine_id = str(model.get("engine") or "gpt-sovits")
+    runtime_supervisor.ensure_ready(engine_id)
     return get_adapter(engine_id).synthesize(text, speed, profile)
