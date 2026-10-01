@@ -3,9 +3,11 @@ from __future__ import annotations
 import atexit
 import os
 import subprocess
+import json
 import threading
 import time
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -362,6 +364,53 @@ class RuntimeSupervisor:
                 )
             return self.start(engine_id)
 
+    def _request_external_activation(self, spec: RuntimeSpec) -> dict:
+        control = spec.external_control or {}
+        mode = str(control.get("mode") or "").strip().lower()
+        if mode != "file":
+            raise RuntimeSupervisorError(
+                f"{spec.engine_id} is owned by {spec.lifecycle_owner} and is not healthy; "
+                "no supported external control bridge is configured"
+            )
+
+        request_dir = Path(str(control.get("request_dir") or "")).expanduser()
+        service_key = str(control.get("service_key") or "").strip()
+        if not request_dir or not service_key:
+            raise RuntimeSupervisorError(
+                f"{spec.engine_id}: external file control requires request_dir and service_key"
+            )
+
+        request_dir.mkdir(parents=True, exist_ok=True)
+        request_id = uuid.uuid4().hex
+        tmp_path = request_dir / f".{request_id}.tmp"
+        request_path = request_dir / f"{request_id}.json"
+        payload = {
+            "schema_version": 1,
+            "action": "activate-engine",
+            "engine_id": spec.engine_id,
+            "service_key": service_key,
+            "request_id": request_id,
+            "created_unix": time.time(),
+        }
+        tmp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        tmp_path.replace(request_path)
+
+        deadline = time.monotonic() + spec.startup_timeout
+        last_error = None
+        while time.monotonic() < deadline:
+            ready, last_error = self._health(spec)
+            if ready:
+                return self.status(spec.engine_id)
+            time.sleep(0.5)
+
+        raise RuntimeSupervisorError(
+            f"{spec.engine_id} activation request timed out after {spec.startup_timeout:.0f}s"
+            + (f": {last_error}" if last_error else "")
+        )
+
     def ensure_ready(self, engine_id: str) -> dict | None:
         registry = self.registry()
         spec = registry.get(engine_id)
@@ -375,6 +424,8 @@ class RuntimeSupervisor:
             return self.status(engine_id)
         if spec.managed and spec.start_on_demand:
             return self.start(engine_id)
+        if (not spec.managed) and spec.start_on_demand:
+            return self._request_external_activation(spec)
         return self.status(engine_id)
 
     def shutdown_all(self) -> None:
