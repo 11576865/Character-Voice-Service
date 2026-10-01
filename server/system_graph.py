@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from server.config import VOICE_DIR
+from server.engine_registry import load_engine_descriptors
 from server.model_registry import list_models
 from server.runtime_registry import load_runtime_registry
 from server.runtime_supervisor import runtime_supervisor
@@ -125,6 +126,28 @@ def build_system_graph(*, include_runtime_status: bool = True) -> dict:
 
     runtime_registry = load_runtime_registry()
     runtime_by_engine = runtime_registry.runtimes
+    try:
+        engine_descriptors = load_engine_descriptors()
+    except Exception as exc:
+        engine_descriptors = {}
+        graph.warn("engine-registry-error", f"Engine Registry could not be read: {exc}")
+
+    for engine_id, descriptor in sorted(engine_descriptors.items()):
+        engine_node = graph.node(
+            _stable_id("engine", engine_id),
+            "engine",
+            engine_id=engine_id,
+            name=descriptor.name,
+            adapter_kind=descriptor.adapter_kind,
+            capability_kind=descriptor.capability_kind,
+            capabilities=dict(descriptor.capabilities),
+        )
+        capability_node = graph.node(
+            _stable_id("capability", descriptor.capability_kind),
+            "capability",
+            capability_id=descriptor.capability_kind,
+        )
+        graph.edge(engine_node, "implements_capability", capability_node)
 
     # Engines/runtimes form the execution side of the graph.
     for engine_id, spec in sorted(runtime_by_engine.items()):
