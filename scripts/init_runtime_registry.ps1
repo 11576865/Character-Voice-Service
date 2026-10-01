@@ -195,8 +195,8 @@ $registry = [ordered]@{
             env = @{}
             path_prepend = @()
             dependencies = @(
-                [ordered]@{ id='python-runtime'; kind='python-runtime'; ownership='engine-private'; path=(if($GptPython){$GptPython}else{'SET_GPT_SOVITS_PYTHON'}) },
-                [ordered]@{ id='source-tree'; kind='source-tree'; ownership='engine-private'; path=(if($GptRoot){$GptRoot}else{'SET_GPT_SOVITS_ROOT'}) }
+                [ordered]@{ id='python-runtime'; kind='python-runtime'; ownership='engine-private'; path=$(if($GptPython){$GptPython}else{'SET_GPT_SOVITS_PYTHON'}) },
+                [ordered]@{ id='source-tree'; kind='source-tree'; ownership='engine-private'; path=$(if($GptRoot){$GptRoot}else{'SET_GPT_SOVITS_ROOT'}) }
             )
         }
         'index-tts' = [ordered]@{
@@ -222,9 +222,9 @@ $registry = [ordered]@{
             }
             path_prepend = @()
             dependencies = @(
-                [ordered]@{ id='python-runtime'; kind='python-runtime'; ownership='engine-private'; path=(if($IndexPython){$IndexPython}else{'SET_INDEX_TTS_PYTHON'}) },
-                [ordered]@{ id='source-tree'; kind='source-tree'; ownership='engine-private'; path=(if($IndexRoot){$IndexRoot}else{'SET_INDEX_TTS_ROOT'}) },
-                [ordered]@{ id='model-store'; kind='model-store'; ownership='engine-private'; path=(if($IndexRoot){Join-Path $IndexRoot 'checkpoints'}else{'SET_INDEX_TTS_MODEL_DIR'}) },
+                [ordered]@{ id='python-runtime'; kind='python-runtime'; ownership='engine-private'; path=$(if($IndexPython){$IndexPython}else{'SET_INDEX_TTS_PYTHON'}) },
+                [ordered]@{ id='source-tree'; kind='source-tree'; ownership='engine-private'; path=$(if($IndexRoot){$IndexRoot}else{'SET_INDEX_TTS_ROOT'}) },
+                [ordered]@{ id='model-store'; kind='model-store'; ownership='engine-private'; path=$(if($IndexRoot){Join-Path $IndexRoot 'checkpoints'}else{'SET_INDEX_TTS_MODEL_DIR'}) },
                 [ordered]@{ id='cvs-sidecar'; kind='sidecar'; ownership='platform-owned'; path=$indexSidecar }
             )
         }
