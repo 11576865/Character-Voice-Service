@@ -67,7 +67,7 @@ foreach ($tool in @(
     foreach ($command in @(Get-Command $tool.Name -All -ErrorAction SilentlyContinue)) {
         if ($command.CommandType -ne 'Application' -or -not $command.Source) { continue }
         $version = Get-ExeVersion $command.Source $tool.Kind
-        Add-InventoryItem $tool.Kind $command.Source 'PATH' 'host-visible' $version.Trim()
+        Add-InventoryItem $tool.Kind $command.Source 'PATH' 'host-visible' ([string]$version).Trim()
     }
 }
 
@@ -83,14 +83,14 @@ if ($conda) {
                 Add-InventoryItem 'conda-env' ([string]$prefix) 'conda-env-list' 'host-visible' ''
                 if (Test-Path -LiteralPath $python -PathType Leaf) {
                     $version = Get-ExeVersion $python 'python'
-                    Add-InventoryItem 'python' $python 'conda-env-list' 'host-visible' $version.Trim()
+                    Add-InventoryItem 'python' $python 'conda-env-list' 'host-visible' ([string]$version).Trim()
                 }
                 foreach ($mediaTool in @('ffmpeg.exe','ffprobe.exe')) {
                     $toolPath = Join-Path ([string]$prefix) ('Library\bin\' + $mediaTool)
                     if (Test-Path -LiteralPath $toolPath -PathType Leaf) {
                         $kind = [IO.Path]::GetFileNameWithoutExtension($mediaTool)
                         $version = Get-ExeVersion $toolPath $kind
-                        Add-InventoryItem $kind $toolPath 'conda-env-list' 'engine-candidate' $version.Trim()
+                        Add-InventoryItem $kind $toolPath 'conda-env-list' 'engine-candidate' ([string]$version).Trim()
                     }
                 }
             }
@@ -106,13 +106,10 @@ if (Test-Path -LiteralPath $RuntimeRegistry -PathType Leaf) {
             $spec = $property.Value
             foreach ($dep in @($spec.dependencies)) {
                 if (-not $dep -or -not $dep.path) { continue }
-                Add-InventoryItem (
-                    if ($dep.kind) { [string]$dep.kind } else { 'declared-dependency' }
-                ) ([string]$dep.path) ("runtime-registry:" + $engineId) (
-                    if ($dep.ownership) { [string]$dep.ownership } else { 'unspecified' }
-                ) (
-                    if ($dep.version) { [string]$dep.version } else { '' }
-                )
+                $depKind = if ($dep.kind) { [string]$dep.kind } else { 'declared-dependency' }
+                $depOwnership = if ($dep.ownership) { [string]$dep.ownership } else { 'unspecified' }
+                $depVersion = if ($dep.version) { [string]$dep.version } else { '' }
+                Add-InventoryItem $depKind ([string]$dep.path) ("runtime-registry:" + $engineId) $depOwnership $depVersion
             }
         }
     } catch {
