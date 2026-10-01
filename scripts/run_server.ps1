@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
 
 if (-not (Test-Path -LiteralPath $runtimeRegistry -PathType Leaf)) {
     Write-Host "Runtime Registry not found. Creating machine-local configuration..." -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot 'bootstrap_runtime_registry.ps1')
+    & (Join-Path $PSScriptRoot 'init_runtime_registry.ps1')
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
