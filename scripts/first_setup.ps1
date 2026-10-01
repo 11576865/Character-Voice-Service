@@ -63,4 +63,14 @@ try {
 }
 finally { Pop-Location }
 
+$runtimeRegistry = Join-Path $projectRoot "config\runtimes.local.json"
+$runtimeInit = Join-Path $PSScriptRoot "init_runtime_registry.ps1"
+if (-not (Test-Path -LiteralPath $runtimeRegistry -PathType Leaf) -and (Test-Path -LiteralPath $runtimeInit -PathType Leaf)) {
+    Write-Host "Detecting local speech-engine runtimes ..."
+    & $runtimeInit
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 2) {
+        Write-Warning "Runtime Registry initialization returned exit code $LASTEXITCODE. You can rerun scripts\init_runtime_registry.ps1 later."
+    }
+}
+
 Write-Host "Setup complete. Start the service with .\scripts\run_server.cmd"
