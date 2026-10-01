@@ -7,9 +7,11 @@ if not defined INDEX_TTS_ROOT set "INDEX_TTS_ROOT=%~dp0..\..\index-tts"
 for %%I in ("%INDEX_TTS_ROOT%") do set "INDEX_TTS_ROOT=%%~fI"
 for %%I in ("%CVS_ROOT%") do set "CVS_ROOT=%%~fI"
 
-if not exist "%INDEX_TTS_ROOT%\.venv\Scripts\python.exe" (
+if not defined INDEX_TTS_PYTHON set "INDEX_TTS_PYTHON=%INDEX_TTS_ROOT%\.venv\Scripts\python.exe"
+
+if not exist "%INDEX_TTS_PYTHON%" (
   echo ERROR: IndexTTS Python environment not found:
-  echo   %INDEX_TTS_ROOT%\.venv\Scripts\python.exe
+  echo   %INDEX_TTS_PYTHON%
   exit /b 2
 )
 
@@ -20,5 +22,5 @@ if not defined INDEX_TTS_USE_BF16 set "INDEX_TTS_USE_BF16=1"
 if not defined INDEX_TTS_USE_QWEN_EMO set "INDEX_TTS_USE_QWEN_EMO=0"
 
 cd /d "%INDEX_TTS_ROOT%"
-"%INDEX_TTS_ROOT%\.venv\Scripts\python.exe" "%CVS_ROOT%\sidecars\index_tts_api.py"
+"%INDEX_TTS_PYTHON%" "%CVS_ROOT%\sidecars\index_tts_api.py"
 exit /b %ERRORLEVEL%
