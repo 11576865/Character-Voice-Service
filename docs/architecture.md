@@ -90,7 +90,7 @@ Runtime Supervisor 读取这张表，用**绝对可执行文件路径**启动 si
 首次生成本机配置：
 
 ```powershell
-.\scripts\bootstrap_runtime_registry.ps1
+.\scripts\init_runtime_registry.ps1
 ```
 
 诊断：
