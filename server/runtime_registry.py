@@ -235,3 +235,12 @@ def load_runtime_registry(path: str | Path | None = None) -> RuntimeRegistry:
         schema_version=schema_version,
         runtimes=parsed,
     )
+
+
+def runtime_base_url(engine_id: str, fallback: str) -> str:
+    """Return the machine-local registered endpoint when available."""
+    registry = load_runtime_registry()
+    spec = registry.get(engine_id)
+    if spec and spec.enabled and spec.endpoint:
+        return spec.endpoint.rstrip("/")
+    return fallback.rstrip("/")
