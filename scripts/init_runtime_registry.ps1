@@ -61,8 +61,8 @@ if ($SupervisorConfig -and (Test-Path -LiteralPath $SupervisorConfig -PathType L
             schema_version = 1
             engines = [ordered]@{
                 'gpt-sovits' = [ordered]@{
-                    runtime_id = 'gpt-sovits-local'
-                    runtime_version = 'local'
+                    runtime_id = if ([string]$gptSvc.system_identity.runtime_id) { [string]$gptSvc.system_identity.runtime_id } else { 'gpt-sovits-local' }
+                    runtime_version = if ([string]$gptSvc.system_identity.runtime_version) { [string]$gptSvc.system_identity.runtime_version } else { 'local' }
                     enabled = [bool]$gptSvc.enabled
                     mode = 'external'
                     lifecycle_owner = 'system-supervisor'
@@ -77,10 +77,14 @@ if ($SupervisorConfig -and (Test-Path -LiteralPath $SupervisorConfig -PathType L
                     shutdown_timeout = [double]$sup.supervisor.stop_timeout_sec
                     env = @{}
                     path_prepend = @()
-                    dependencies = @(
-                        [ordered]@{ id='python-runtime'; kind='python-runtime'; ownership='engine-private'; path=[string]$gptSvc.command.exe },
-                        [ordered]@{ id='source-tree'; kind='source-tree'; ownership='engine-private'; path=[string]$gptSvc.cwd }
-                    )
+                    dependencies = if ($null -ne $gptSvc.owned_dependencies) {
+                        @($gptSvc.owned_dependencies)
+                    } else {
+                        @(
+                            [ordered]@{ id='python-runtime'; kind='python-runtime'; ownership='engine-private'; path=[string]$gptSvc.command.exe },
+                            [ordered]@{ id='source-tree'; kind='source-tree'; ownership='engine-private'; path=[string]$gptSvc.cwd }
+                        )
+                    }
                     external_control = [ordered]@{
                         mode = 'file'
                         request_dir = $controlDir
@@ -89,8 +93,8 @@ if ($SupervisorConfig -and (Test-Path -LiteralPath $SupervisorConfig -PathType L
                     }
                 }
                 'index-tts' = [ordered]@{
-                    runtime_id = 'index-tts-2.5-local'
-                    runtime_version = '2.5'
+                    runtime_id = if ([string]$indexSvc.system_identity.runtime_id) { [string]$indexSvc.system_identity.runtime_id } else { 'index-tts-2.5-local' }
+                    runtime_version = if ([string]$indexSvc.system_identity.runtime_version) { [string]$indexSvc.system_identity.runtime_version } else { '2.5' }
                     enabled = [bool]$indexSvc.enabled
                     mode = 'external'
                     lifecycle_owner = 'system-supervisor'
@@ -105,12 +109,16 @@ if ($SupervisorConfig -and (Test-Path -LiteralPath $SupervisorConfig -PathType L
                     shutdown_timeout = [double]$sup.supervisor.stop_timeout_sec
                     env = @{}
                     path_prepend = @()
-                    dependencies = @(
-                        [ordered]@{ id='python-runtime'; kind='python-runtime'; ownership='engine-private'; path=[string]$indexSvc.command.exe },
-                        [ordered]@{ id='source-tree'; kind='source-tree'; ownership='engine-private'; path=[string]$indexSvc.cwd },
-                        [ordered]@{ id='model-store'; kind='model-store'; ownership='engine-private'; path=[string]$indexSvc.environment.INDEX_TTS_MODEL_DIR },
-                        [ordered]@{ id='cvs-sidecar'; kind='sidecar'; ownership='platform-owned'; path=([string]@($indexSvc.command.args)[0]) }
-                    )
+                    dependencies = if ($null -ne $indexSvc.owned_dependencies) {
+                        @($indexSvc.owned_dependencies)
+                    } else {
+                        @(
+                            [ordered]@{ id='python-runtime'; kind='python-runtime'; ownership='engine-private'; path=[string]$indexSvc.command.exe },
+                            [ordered]@{ id='source-tree'; kind='source-tree'; ownership='engine-private'; path=[string]$indexSvc.cwd },
+                            [ordered]@{ id='model-store'; kind='model-store'; ownership='engine-private'; path=[string]$indexSvc.environment.INDEX_TTS_MODEL_DIR },
+                            [ordered]@{ id='cvs-sidecar'; kind='sidecar'; ownership='platform-owned'; path=([string]@($indexSvc.command.args)[0]) }
+                        )
+                    }
                     external_control = [ordered]@{
                         mode = 'file'
                         request_dir = $controlDir
