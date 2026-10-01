@@ -6,11 +6,8 @@ import urllib.request
 
 from fastapi import HTTPException
 
-from server.config import (
-    GPT_SOVITS_SET_GPT_WEIGHTS_URL,
-    GPT_SOVITS_SET_SOVITS_WEIGHTS_URL,
-    GPT_SOVITS_TTS_URL,
-)
+from server.config import GPT_SOVITS_BASE_URL
+from server.runtime_registry import runtime_base_url
 
 
 _backend_lock = threading.Lock()
@@ -28,6 +25,15 @@ def _backend_error(exc: urllib.error.HTTPError, operation: str) -> HTTPException
     return HTTPException(
         status_code=502,
         detail=f"GPT-SoVITS {operation} error: {body}",
+    )
+
+
+def _urls() -> tuple[str, str, str]:
+    base = runtime_base_url("gpt-sovits", GPT_SOVITS_BASE_URL)
+    return (
+        f"{base}/tts",
+        f"{base}/set_gpt_weights",
+        f"{base}/set_sovits_weights",
     )
 
 
@@ -72,13 +78,15 @@ def _ensure_selected_model(profile: dict) -> None:
     # GPT-SoVITS exposes these as separate GET control endpoints. Keep the
     # whole switch + synthesis operation under one lock so concurrent requests
     # cannot cross model boundaries.
+    tts_url, set_gpt_url, set_sovits_url = _urls()
+
     _set_weight(
-        GPT_SOVITS_SET_SOVITS_WEIGHTS_URL,
+        set_sovits_url,
         signature[1],
         "SoVITS weight switch",
     )
     _set_weight(
-        GPT_SOVITS_SET_GPT_WEIGHTS_URL,
+        set_gpt_url,
         signature[0],
         "GPT weight switch",
     )
@@ -121,8 +129,9 @@ def _synthesize_locked(text: str, speed: float, profile: dict) -> bytes:
     }
 
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    tts_url, _, _ = _urls()
     request = urllib.request.Request(
-        GPT_SOVITS_TTS_URL,
+        tts_url,
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
