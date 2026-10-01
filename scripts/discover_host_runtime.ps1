@@ -25,6 +25,7 @@ function Get-ExeVersion([string]$Path, [string]$Kind) {
             return [string]((& $Path --version 2>&1 | Select-Object -First 1))
         }
     } catch {}
+    finally { $global:LASTEXITCODE = 0 }
     return ''
 }
 
@@ -138,3 +139,5 @@ Move-Item -LiteralPath $temp -Destination $OutputPath -Force
 
 Write-Host ("Host runtime inventory written: {0}" -f $OutputPath) -ForegroundColor Green
 Write-Host ("Items: {0}" -f $items.Count)
+
+$global:LASTEXITCODE = 0
