@@ -209,7 +209,7 @@ def load_runtime_registry(path: str | Path | None = None) -> RuntimeRegistry:
         )
 
     try:
-        raw = json.loads(registry_path.read_text(encoding="utf-8"))
+        raw = json.loads(registry_path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"Runtime Registry JSON is invalid: {registry_path}: {exc}") from exc
 
