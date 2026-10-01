@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import os
 import subprocess
 import threading
@@ -68,12 +69,18 @@ class RuntimeSupervisor:
 
         if spec.executable:
             executable_dir = spec.executable.parent
+            env_root = (
+                executable_dir.parent
+                if executable_dir.name.casefold() in {"scripts", "bin"}
+                else executable_dir
+            )
             paths.extend([
                 str(executable_dir),
-                str(executable_dir / "Scripts"),
-                str(executable_dir / "Library" / "bin"),
-                str(executable_dir / "Library" / "usr" / "bin"),
-                str(executable_dir / "Library" / "mingw-w64" / "bin"),
+                str(env_root),
+                str(env_root / "Scripts"),
+                str(env_root / "Library" / "bin"),
+                str(env_root / "Library" / "usr" / "bin"),
+                str(env_root / "Library" / "mingw-w64" / "bin"),
             ])
 
         seen: set[str] = set()
@@ -397,3 +404,4 @@ class RuntimeSupervisor:
 
 
 runtime_supervisor = RuntimeSupervisor()
+atexit.register(runtime_supervisor.shutdown_all)
