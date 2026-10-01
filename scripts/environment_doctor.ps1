@@ -76,6 +76,30 @@ if (Test-Path -LiteralPath $indexPython -PathType Leaf) {
     Write-Host ("IndexTTS .venv not found at {0}" -f $indexPython) -ForegroundColor DarkYellow
 }
 
+
+$runtimeRegistry = Join-Path $projectRoot 'config\runtimes.local.json'
+Write-Host ''
+if (Test-Path -LiteralPath $runtimeRegistry -PathType Leaf) {
+    Write-Host ("Runtime Registry: {0}" -f $runtimeRegistry) -ForegroundColor Green
+    try {
+        $registry = Get-Content -LiteralPath $runtimeRegistry -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($property in @($registry.engines.PSObject.Properties)) {
+            $engine = $property.Name
+            $spec = $property.Value
+            $enabled = if ($spec.enabled) { 'enabled' } else { 'disabled' }
+            Write-Host ("  {0}: {1}" -f $engine, $enabled)
+            if ($spec.executable) { Write-Host ("    executable: {0}" -f $spec.executable) }
+            if ($spec.cwd) { Write-Host ("    cwd: {0}" -f $spec.cwd) }
+            if ($spec.health_url) { Write-Host ("    health: {0}" -f $spec.health_url) }
+            if ($spec.exclusive_group) { Write-Host ("    exclusive group: {0}" -f $spec.exclusive_group) }
+        }
+    } catch {
+        Write-Host ("  ERROR: invalid Runtime Registry: {0}" -f $_.Exception.Message) -ForegroundColor Red
+    }
+} else {
+    Write-Host 'Runtime Registry: missing; run scripts\bootstrap_runtime_registry.ps1' -ForegroundColor Yellow
+}
+
 if ($FixBaseAutoActivate) {
     $conda = Get-Command conda -ErrorAction SilentlyContinue
     if (-not $conda) {
