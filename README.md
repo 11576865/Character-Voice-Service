@@ -44,4 +44,4 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 .\scripts\run_server.ps1
 ```
 
-运行时状态可通过 `GET /v1/runtime` 查看。已登记且启用 `start_on_demand` 的引擎会在首次请求时由 Runtime Supervisor 使用各自的 Python 绝对路径启动。
+运行时状态可通过受管理员令牌保护的 `GET /v1/runtime` 查看（请求头 `X-CVS-Token`）。已登记且启用 `start_on_demand` 的引擎会在首次请求时由 Runtime Supervisor 使用各自的 Python 绝对路径启动。
