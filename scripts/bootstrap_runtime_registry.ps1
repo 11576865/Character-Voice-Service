@@ -3,9 +3,14 @@ param(
     [switch]$Force
 )
 
-# Compatibility wrapper. Runtime Registry initialization is owned by
-# init_runtime_registry.ps1 so Supervisor integration, runtime identity,
-# dependency ownership and future schema changes cannot drift between scripts.
+$ErrorActionPreference = 'Stop'
 $target = Join-Path $PSScriptRoot 'init_runtime_registry.ps1'
-& $target -Force:$Force
-exit $LASTEXITCODE
+
+try {
+    & $target -Force:$Force
+    exit 0
+}
+catch {
+    Write-Error ("Runtime Registry initialization failed: {0}" -f $_.Exception.Message)
+    exit 1
+}
