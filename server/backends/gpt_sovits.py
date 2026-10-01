@@ -9,6 +9,12 @@ from fastapi import HTTPException
 from server.config import GPT_SOVITS_BASE_URL
 from server.runtime_registry import runtime_base_url
 
+# Compatibility constants for callers/tests; synthesis resolves the machine-local
+# Runtime Registry endpoint dynamically at call time.
+GPT_SOVITS_TTS_URL = f"{GPT_SOVITS_BASE_URL}/tts"
+GPT_SOVITS_SET_GPT_WEIGHTS_URL = f"{GPT_SOVITS_BASE_URL}/set_gpt_weights"
+GPT_SOVITS_SET_SOVITS_WEIGHTS_URL = f"{GPT_SOVITS_BASE_URL}/set_sovits_weights"
+
 
 _backend_lock = threading.Lock()
 _active_managed_model: tuple[str, str] | None = None
