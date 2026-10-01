@@ -20,6 +20,11 @@ from server.model_registry import (
     scan_model_root,
     sha256_file,
 )
+from server.runtime_supervisor import (
+    RuntimeConflictError,
+    RuntimeSupervisorError,
+    runtime_supervisor,
+)
 from server.voice_profiles import (
     iter_real_profile_paths,
     public_profile_summary,
@@ -121,6 +126,7 @@ def root():
         "models": "/v1/models",
         "engines": "/v1/engines",
         "speech": "/v1/audio/speech",
+        "runtime": "/v1/runtime",
         "docs": "/docs",
     }
 
@@ -142,6 +148,48 @@ def health():
 @app.get("/v1/engines")
 def engines():
     return {"engines": list_engines()}
+
+
+@app.get("/v1/runtime")
+def runtime_info():
+    try:
+        return runtime_supervisor.diagnostics()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"Runtime Registry error: {exc}") from exc
+
+
+@app.post("/v1/admin/runtime/{engine_id}/start", dependencies=[Depends(require_admin)])
+def start_runtime(engine_id: str):
+    try:
+        return runtime_supervisor.start(engine_id)
+    except RuntimeConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeSupervisorError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"Runtime start failed: {exc}") from exc
+
+
+@app.post("/v1/admin/runtime/{engine_id}/stop", dependencies=[Depends(require_admin)])
+def stop_runtime(engine_id: str):
+    try:
+        return runtime_supervisor.stop(engine_id)
+    except RuntimeSupervisorError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"Runtime stop failed: {exc}") from exc
+
+
+@app.post("/v1/admin/runtime/{engine_id}/restart", dependencies=[Depends(require_admin)])
+def restart_runtime(engine_id: str):
+    try:
+        return runtime_supervisor.restart(engine_id)
+    except RuntimeConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeSupervisorError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"Runtime restart failed: {exc}") from exc
 
 
 @app.get("/v1/models")
@@ -239,6 +287,13 @@ def speech(request: SpeechRequest):
             status_code=400,
             detail="model field no longer selects the inference engine; use model_id",
         )
+
+    try:
+        runtime_supervisor.ensure_ready(selected_engine)
+    except RuntimeConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeSupervisorError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     audio = synthesize(text=request.input, speed=request.speed, profile=selection)
     saved_path = save_wav(audio)
