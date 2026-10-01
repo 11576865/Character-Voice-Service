@@ -272,3 +272,41 @@ def test_generation_revision_includes_runtime_identity(tmp_path, monkeypatch):
     })
     assert second.status_code == 200
     assert second.headers["x-cvs-generation-revision"] != revision_a
+
+
+def test_speech_resolve_returns_runtime_provenance_without_synthesis(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    _write_profile(tmp_path / "march-7th.json")
+    monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
+
+    runtime = SimpleNamespace(
+        runtime_id="gpt-sovits-local",
+        configuration_revision="r" * 64,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "load_runtime_registry",
+        lambda: SimpleNamespace(get=lambda engine_id: runtime),
+    )
+
+    called = {"synthesize": 0}
+    monkeypatch.setattr(
+        app_module,
+        "synthesize",
+        lambda **kwargs: called.__setitem__("synthesize", called["synthesize"] + 1),
+    )
+
+    response = client.post("/v1/audio/resolve", json={
+        "voice": "march-7th",
+        "input": "Hello",
+        "speed": 1.0,
+    })
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["voice"] == "march-7th"
+    assert payload["engine"] == "gpt-sovits"
+    assert payload["runtime"] == "gpt-sovits-local"
+    assert payload["runtime_revision"] == "r" * 64
+    assert len(payload["generation_revision"]) == 64
+    assert called["synthesize"] == 0
