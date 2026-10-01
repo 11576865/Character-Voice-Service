@@ -4,6 +4,7 @@ param(
     [string]$GptPython = '',
     [string]$IndexRoot = '',
     [string]$IndexPython = '',
+    [string]$SupervisorConfig = '',
     [switch]$Force
 )
 
@@ -35,6 +36,83 @@ if ((Test-Path -LiteralPath $configPath -PathType Leaf) -and -not $Force) {
     Write-Host "Runtime Registry already exists: $configPath" -ForegroundColor Yellow
     Write-Host 'Use -Force to regenerate it.' -ForegroundColor Yellow
     exit 2
+}
+
+if (-not $SupervisorConfig) {
+    $SupervisorConfig = First-ExistingFile @(
+        $env:CVS_SYSTEM_SUPERVISOR_CONFIG,
+        (Join-Path $parentRoot 'Supervisor\supervisor.config.json'),
+        (Join-Path $parentRoot 'supervisor.config.json')
+    )
+}
+
+if ($SupervisorConfig -and (Test-Path -LiteralPath $SupervisorConfig -PathType Leaf)) {
+    $SupervisorConfig = (Resolve-Path -LiteralPath $SupervisorConfig).Path
+    Write-Host "System Supervisor config detected: $SupervisorConfig" -ForegroundColor Cyan
+    $sup = Get-Content -LiteralPath $SupervisorConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+    $supRoot = Split-Path -Parent $SupervisorConfig
+    $controlDir = Join-Path $supRoot 'character_voice_supervisor\control\requests'
+
+    $gptSvc = @($sup.services | Where-Object { [string]$_.key -eq 'Api' }) | Select-Object -First 1
+    $indexSvc = @($sup.services | Where-Object { [string]$_.key -eq 'IndexTTS' }) | Select-Object -First 1
+    if ($null -ne $gptSvc -and $null -ne $indexSvc) {
+        $registry = [ordered]@{
+            schema_version = 1
+            engines = [ordered]@{
+                'gpt-sovits' = [ordered]@{
+                    enabled = [bool]$gptSvc.enabled
+                    mode = 'external'
+                    lifecycle_owner = 'system-supervisor'
+                    executable = $null
+                    cwd = $null
+                    args = @()
+                    endpoint = ('http://127.0.0.1:{0}' -f [int]$gptSvc.port)
+                    health_url = if ([string]$gptSvc.health.url) { [string]$gptSvc.health.url } else { ('http://127.0.0.1:{0}/docs' -f [int]$gptSvc.port) }
+                    start_on_demand = $true
+                    exclusive_group = 'gpu-0'
+                    startup_timeout = [double]$gptSvc.startup_timeout_sec
+                    shutdown_timeout = [double]$sup.supervisor.stop_timeout_sec
+                    env = @{}
+                    path_prepend = @()
+                    external_control = [ordered]@{
+                        mode = 'file'
+                        request_dir = $controlDir
+                        service_key = 'Api'
+                    }
+                }
+                'index-tts' = [ordered]@{
+                    enabled = [bool]$indexSvc.enabled
+                    mode = 'external'
+                    lifecycle_owner = 'system-supervisor'
+                    executable = $null
+                    cwd = $null
+                    args = @()
+                    endpoint = ('http://127.0.0.1:{0}' -f [int]$indexSvc.port)
+                    health_url = if ([string]$indexSvc.health.url) { [string]$indexSvc.health.url } else { ('http://127.0.0.1:{0}/health' -f [int]$indexSvc.port) }
+                    start_on_demand = $true
+                    exclusive_group = 'gpu-0'
+                    startup_timeout = [double]$indexSvc.startup_timeout_sec
+                    shutdown_timeout = [double]$sup.supervisor.stop_timeout_sec
+                    env = @{}
+                    path_prepend = @()
+                    external_control = [ordered]@{
+                        mode = 'file'
+                        request_dir = $controlDir
+                        service_key = 'IndexTTS'
+                    }
+                }
+            }
+        }
+
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        $registry | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
+        Write-Host ''
+        Write-Host "Runtime Registry written from System Supervisor: $configPath" -ForegroundColor Green
+        Write-Host 'Lifecycle owner: system-supervisor' -ForegroundColor Green
+        Write-Host 'CVS will request engine switches through the Supervisor control bridge instead of spawning engine processes itself.'
+        exit 0
+    }
+    Write-Warning 'Supervisor config was found, but Api/IndexTTS services were not both present. Falling back to direct runtime discovery.'
 }
 
 if (-not $GptRoot) {
