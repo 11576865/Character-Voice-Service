@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "engine_id": "index-tts",
+  "name": "IndexTTS 2.5",
+  "capability_kind": "speech-synthesis",
+  "adapter_kind": "builtin:index-tts",
+  "capabilities": {
+    "zero_shot": true,
+    "fine_tuned_model": false,
+    "shared_engine_model": true,
+    "audio_streaming": false,
+    "text_streaming": false,
+    "emotion": "reference-or-vector",
+    "emotion_text": false,
+    "speed_control": "duration-factor",
+    "pronunciation_control": "upstream-annotations",
+    "output_sample_rate": 22050,
+    "max_concurrency": 1,
+    "supports_cancel": false,
+    "model_switch_cost": "none",
+    "speaker_switch_cost": "backend-dependent"
+  },
+  "protocol": {},
+  "metadata": {
+    "family": "IndexTTS",
+    "version": "2.5"
+  }
+}
