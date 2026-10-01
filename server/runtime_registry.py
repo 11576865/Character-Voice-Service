@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -18,6 +19,8 @@ _ENGINE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 @dataclass(frozen=True)
 class RuntimeSpec:
     engine_id: str
+    runtime_id: str
+    runtime_version: str | None
     enabled: bool
     mode: str
     executable: Path | None
@@ -33,10 +36,33 @@ class RuntimeSpec:
     path_prepend: tuple[Path, ...] = ()
     lifecycle_owner: str = "cvs"
     external_control: dict[str, str] = field(default_factory=dict)
+    dependencies: tuple[dict[str, Any], ...] = ()
 
     @property
     def managed(self) -> bool:
         return self.mode == "managed"
+
+    @property
+    def configuration_revision(self) -> str:
+        payload = {
+            "engine_id": self.engine_id,
+            "runtime_id": self.runtime_id,
+            "runtime_version": self.runtime_version,
+            "mode": self.mode,
+            "endpoint": self.endpoint,
+            "health_url": self.health_url,
+            "lifecycle_owner": self.lifecycle_owner,
+            "exclusive_group": self.exclusive_group,
+            "dependencies": list(self.dependencies),
+        }
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
 
     def command(self) -> list[str]:
         if not self.managed or self.executable is None:
@@ -46,6 +72,9 @@ class RuntimeSpec:
     def diagnostic(self) -> dict[str, Any]:
         return {
             "engine": self.engine_id,
+            "runtime_id": self.runtime_id,
+            "runtime_version": self.runtime_version,
+            "runtime_revision": self.configuration_revision,
             "enabled": self.enabled,
             "mode": self.mode,
             "managed": self.managed,
@@ -62,6 +91,7 @@ class RuntimeSpec:
             "path_prepend": [str(path) for path in self.path_prepend],
             "lifecycle_owner": self.lifecycle_owner,
             "external_control": dict(self.external_control),
+            "dependencies": [dict(item) for item in self.dependencies],
         }
 
 
@@ -129,6 +159,11 @@ def _parse_spec(engine_id: str, raw: object) -> RuntimeSpec:
     if mode not in {"managed", "external"}:
         raise ValueError(f"{engine_id}: mode must be managed or external")
 
+    runtime_id = str(raw.get("runtime_id") or f"{engine_id}-local").strip()
+    if not _ENGINE_ID.fullmatch(runtime_id):
+        raise ValueError(f"{engine_id}: invalid runtime_id")
+    runtime_version = _string_or_none(raw.get("runtime_version"))
+
     executable = _expand_path(
         raw.get("executable", raw.get("python")),
         field_name=f"{engine_id}.executable",
@@ -189,8 +224,35 @@ def _parse_spec(engine_id: str, raw: object) -> RuntimeSpec:
         if value is not None
     }
 
+    deps_raw = raw.get("dependencies") or []
+    if not isinstance(deps_raw, list):
+        raise ValueError(f"{engine_id}: dependencies must be an array")
+    dependencies: list[dict[str, Any]] = []
+    for index, item in enumerate(deps_raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"{engine_id}: dependency #{index + 1} must be an object")
+        dep_id = str(item.get("id") or "").strip()
+        dep_kind = str(item.get("kind") or "").strip()
+        if not dep_id or not dep_kind:
+            raise ValueError(f"{engine_id}: dependency #{index + 1} requires id and kind")
+        normalized = {
+            str(key): (
+                os.path.expandvars(str(value))
+                if isinstance(value, str)
+                else value
+            )
+            for key, value in item.items()
+            if value is not None
+        }
+        normalized["id"] = dep_id
+        normalized["kind"] = dep_kind
+        normalized.setdefault("ownership", "unspecified")
+        dependencies.append(normalized)
+
     return RuntimeSpec(
         engine_id=engine_id,
+        runtime_id=runtime_id,
+        runtime_version=runtime_version,
         enabled=enabled,
         mode=mode,
         executable=executable,
@@ -212,6 +274,7 @@ def _parse_spec(engine_id: str, raw: object) -> RuntimeSpec:
         path_prepend=path_prepend,
         lifecycle_owner=lifecycle_owner,
         external_control=external_control,
+        dependencies=tuple(dependencies),
     )
 
 
