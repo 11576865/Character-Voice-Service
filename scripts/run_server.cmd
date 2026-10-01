@@ -12,7 +12,10 @@ if not exist "%VENV_PYTHON%" (
 if not exist "%RUNTIME_REGISTRY%" (
   echo Runtime Registry not found. Creating machine-local configuration...
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_ROOT%\scripts\init_runtime_registry.ps1"
-  if errorlevel 1 exit /b %ERRORLEVEL%
+  if errorlevel 1 (
+    echo ERROR: Runtime Registry initialization failed.
+    exit /b 1
+  )
 )
 
 pushd "%PROJECT_ROOT%"
