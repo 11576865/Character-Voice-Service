@@ -222,3 +222,53 @@ def test_runtime_endpoint_exposes_supervisor_diagnostics(monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()["registry"]["schema_version"] == 1
+
+
+def test_generation_revision_includes_runtime_identity(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    _write_profile(tmp_path / "march-7th.json")
+    monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "SAVE_GENERATED_WAV", False)
+    monkeypatch.setattr(app_module, "synthesize", lambda **kwargs: b"RIFF....WAVE")
+    monkeypatch.setattr(
+        app_module.runtime_supervisor,
+        "ensure_ready",
+        lambda engine_id: {"engine": engine_id, "ready": True},
+    )
+
+    runtime_a = SimpleNamespace(
+        runtime_id="gpt-sovits-local",
+        configuration_revision="a" * 64,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "load_runtime_registry",
+        lambda: SimpleNamespace(get=lambda engine_id: runtime_a),
+    )
+
+    first = client.post("/v1/audio/speech", json={
+        "voice": "march-7th",
+        "input": "Hello",
+    })
+    assert first.status_code == 200
+    assert first.headers["x-cvs-runtime"] == "gpt-sovits-local"
+    assert first.headers["x-cvs-runtime-revision"] == "a" * 64
+    revision_a = first.headers["x-cvs-generation-revision"]
+
+    runtime_b = SimpleNamespace(
+        runtime_id="gpt-sovits-local",
+        configuration_revision="b" * 64,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "load_runtime_registry",
+        lambda: SimpleNamespace(get=lambda engine_id: runtime_b),
+    )
+
+    second = client.post("/v1/audio/speech", json={
+        "voice": "march-7th",
+        "input": "Hello",
+    })
+    assert second.status_code == 200
+    assert second.headers["x-cvs-generation-revision"] != revision_a
