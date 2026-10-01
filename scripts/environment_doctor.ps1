@@ -22,6 +22,7 @@ function Get-FirstLine([string]$Exe, [string[]]$Args) {
     } catch {
         return ''
     }
+    finally { $global:LASTEXITCODE = 0 }
 }
 
 function Format-VersionLine([object]$Value) {
@@ -136,3 +137,5 @@ Write-Host '  - CVS is launched with its absolute .venv\Scripts\python.exe.'
 Write-Host '  - IndexTTS is launched with its own absolute .venv\Scripts\python.exe.'
 Write-Host '  - Do not install TTS engine dependencies into Conda base.'
 Write-Host '  - System FFmpeg and engine-local Python environments are separate concerns.'
+
+$global:LASTEXITCODE = 0
