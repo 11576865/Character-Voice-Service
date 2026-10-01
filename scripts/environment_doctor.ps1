@@ -97,7 +97,7 @@ if (Test-Path -LiteralPath $runtimeRegistry -PathType Leaf) {
         Write-Host ("  ERROR: invalid Runtime Registry: {0}" -f $_.Exception.Message) -ForegroundColor Red
     }
 } else {
-    Write-Host 'Runtime Registry: missing; run scripts\bootstrap_runtime_registry.ps1' -ForegroundColor Yellow
+    Write-Host 'Runtime Registry: missing; run scripts\init_runtime_registry.ps1' -ForegroundColor Yellow
 }
 
 if ($FixBaseAutoActivate) {
