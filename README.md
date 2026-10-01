@@ -30,3 +30,18 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ```
 
 详细说明见 [docs/windows-environment-isolation.md](docs/windows-environment-isolation.md)。
+
+
+生成本机 Runtime Registry：
+
+```powershell
+.\scripts\init_runtime_registry.ps1
+```
+
+然后启动 CVS：
+
+```powershell
+.\scripts\run_server.ps1
+```
+
+运行时状态可通过 `GET /v1/runtime` 查看。已登记且启用 `start_on_demand` 的引擎会在首次请求时由 Runtime Supervisor 使用各自的 Python 绝对路径启动。
