@@ -105,13 +105,13 @@ CVS 进程内的 Runtime Supervisor 负责引擎进程生命周期。收到推�
 
 同一 `exclusive_group` 中若已有 Supervisor 自己启动的另一引擎，则会先停止旧引擎再启动新引擎。若冲突进程是用户手工启动、Supervisor 并不拥有，则不会强杀，而是明确拒绝并要求用户处理。
 
-诊断：
+诊断与管理接口都需要 `X-CVS-Token`：
 
 ```http
 GET /v1/runtime
 ```
 
-管理接口需要 `X-CVS-Token`：
+管理：
 
 ```http
 POST /v1/admin/runtime/gpt-sovits/start
