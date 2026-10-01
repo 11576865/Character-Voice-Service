@@ -28,7 +28,7 @@ function Get-ExeVersion([string]$Path, [string]$Kind) {
     return ''
 }
 
-$items = New-Object System.Collections.Generic.List[object]
+$items = @()
 $seen = @{}
 
 function Add-InventoryItem(
@@ -48,14 +48,14 @@ function Add-InventoryItem(
     if ($seen.ContainsKey($key)) { return }
     $seen[$key] = $true
     $exists = Test-Path -LiteralPath $full
-    $items.Add([ordered]@{
+    $script:items += [pscustomobject][ordered]@{
         kind = $Kind
         path = $full
         source = $Source
         scope = $Scope
         version = $Version
         exists = [bool]$exists
-    }) | Out-Null
+    }
 }
 
 foreach ($tool in @(
@@ -127,7 +127,7 @@ $payload = [ordered]@{
         active_conda_prefix = [string]$env:CONDA_PREFIX
         powershell = $PSVersionTable.PSVersion.ToString()
     }
-    items = @($items)
+    items = $items
 }
 
 $parent = Split-Path -Parent $OutputPath
