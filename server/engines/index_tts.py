@@ -4,7 +4,8 @@ import urllib.request
 
 from fastapi import HTTPException
 
-from server.config import INDEX_TTS_HEALTH_URL, INDEX_TTS_TTS_URL
+from server.config import INDEX_TTS_BASE_URL
+from server.runtime_registry import runtime_base_url
 
 
 class IndexTTSAdapter:
@@ -32,7 +33,8 @@ class IndexTTSAdapter:
 
     def health(self) -> dict:
         try:
-            with urllib.request.urlopen(INDEX_TTS_HEALTH_URL, timeout=2) as response:
+            health_url = runtime_base_url("index-tts", INDEX_TTS_BASE_URL) + "/health"
+            with urllib.request.urlopen(health_url, timeout=2) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             return {
                 "status": payload.get("status", "ready"),
@@ -92,8 +94,9 @@ class IndexTTSAdapter:
             "text_normalization": bool(params.get("text_normalization", True)),
         }
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        tts_url = runtime_base_url("index-tts", INDEX_TTS_BASE_URL) + "/synthesize"
         request = urllib.request.Request(
-            INDEX_TTS_TTS_URL,
+            tts_url,
             data=body,
             headers={"Content-Type": "application/json"},
             method="POST",
