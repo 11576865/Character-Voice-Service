@@ -31,6 +31,8 @@ class RuntimeSpec:
     shutdown_timeout: float
     env: dict[str, str] = field(default_factory=dict)
     path_prepend: tuple[Path, ...] = ()
+    lifecycle_owner: str = "cvs"
+    external_control: dict[str, str] = field(default_factory=dict)
 
     @property
     def managed(self) -> bool:
@@ -58,6 +60,8 @@ class RuntimeSpec:
             "shutdown_timeout": self.shutdown_timeout,
             "env_keys": sorted(self.env),
             "path_prepend": [str(path) for path in self.path_prepend],
+            "lifecycle_owner": self.lifecycle_owner,
+            "external_control": dict(self.external_control),
         }
 
 
@@ -175,6 +179,16 @@ def _parse_spec(engine_id: str, raw: object) -> RuntimeSpec:
     if group and not _ENGINE_ID.fullmatch(group):
         raise ValueError(f"{engine_id}: invalid exclusive_group")
 
+    lifecycle_owner = str(raw.get("lifecycle_owner") or ("cvs" if mode == "managed" else "external")).strip()
+    control_raw = raw.get("external_control") or {}
+    if not isinstance(control_raw, dict):
+        raise ValueError(f"{engine_id}: external_control must be an object")
+    external_control = {
+        str(key): os.path.expandvars(str(value))
+        for key, value in control_raw.items()
+        if value is not None
+    }
+
     return RuntimeSpec(
         engine_id=engine_id,
         enabled=enabled,
@@ -196,6 +210,8 @@ def _parse_spec(engine_id: str, raw: object) -> RuntimeSpec:
         ),
         env=env,
         path_prepend=path_prepend,
+        lifecycle_owner=lifecycle_owner,
+        external_control=external_control,
     )
 
 
