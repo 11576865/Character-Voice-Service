@@ -81,3 +81,12 @@ def test_external_runtime_does_not_require_local_process_command(tmp_path):
     spec = load_runtime_registry(path).get("remote-engine")
     assert spec is not None
     assert spec.managed is False
+
+
+def test_registry_accepts_utf8_bom(tmp_path):
+    path = tmp_path / "runtimes.json"
+    payload = json.dumps({"schema_version": 1, "engines": {}})
+    path.write_bytes(b"\xef\xbb\xbf" + payload.encode("utf-8"))
+    registry = load_runtime_registry(path)
+    assert registry.schema_version == 1
+    assert registry.runtimes == {}
