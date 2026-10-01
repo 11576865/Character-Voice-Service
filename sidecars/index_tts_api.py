@@ -18,6 +18,7 @@ import json
 import os
 import tempfile
 import threading
+import ipaddress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -35,6 +36,7 @@ USE_QWEN_EMO = os.environ.get("INDEX_TTS_USE_QWEN_EMO", "0") == "1"
 
 SUPPORTED_LANGUAGES = {"zh", "en", "ja", "es", "ar"}
 _INFER_LOCK = threading.Lock()
+_SHUTDOWN_REQUESTED = threading.Event()
 
 
 def normalize_language(value: object) -> str:
@@ -76,10 +78,18 @@ def load_tts():
 
 class IndexTTSServer(ThreadingHTTPServer):
     daemon_threads = True
+    allow_reuse_address = True
 
     def __init__(self, address, handler_class, tts):
         super().__init__(address, handler_class)
         self.tts = tts
+
+    def request_shutdown(self, reason: str) -> None:
+        if _SHUTDOWN_REQUESTED.is_set():
+            return
+        _SHUTDOWN_REQUESTED.set()
+        print(f"IndexTTS sidecar shutdown requested: {reason}", flush=True)
+        threading.Thread(target=self.shutdown, daemon=True).start()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -130,8 +140,24 @@ class Handler(BaseHTTPRequestHandler):
         self.json_response(404, {"error": "not found"})
 
     def do_POST(self) -> None:
+        if self.path == "/shutdown":
+            try:
+                client_ip = ipaddress.ip_address(self.client_address[0])
+            except ValueError:
+                client_ip = None
+            if client_ip is None or not client_ip.is_loopback:
+                self.json_response(403, {"error": "shutdown is loopback-only"})
+                return
+            self.json_response(202, {"status": "stopping", "engine": "index-tts"})
+            self.server.request_shutdown("HTTP /shutdown")
+            return
+
         if self.path != "/synthesize":
             self.json_response(404, {"error": "not found"})
+            return
+
+        if _SHUTDOWN_REQUESTED.is_set():
+            self.json_response(503, {"error": "server is stopping"})
             return
 
         output_path = None
