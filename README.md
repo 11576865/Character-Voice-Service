@@ -11,3 +11,22 @@ Character Voice Service 是一个刚刚起步的本地角色语音基础设施�
 相关项目：
 
 - [Character Voice Reader](https://github.com/11576865/Character-Voice-Reader) — 独立的文档阅读与语音朗读客户端。
+
+
+## Windows 环境隔离
+
+Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并关闭 Conda `base` 自动激活，避免旧版 FFmpeg、Python 或 DLL 路径污染其他项目。
+
+诊断当前环境：
+
+```powershell
+.\scripts\environment_doctor.ps1
+```
+
+需要关闭 `base` 自动激活时：
+
+```powershell
+.\scripts\environment_doctor.ps1 -FixBaseAutoActivate
+```
+
+详细说明见 [docs/windows-environment-isolation.md](docs/windows-environment-isolation.md)。
