@@ -1,10 +1,13 @@
 @echo off
 setlocal
 cd /d "%~dp0.."
-if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" -m scripts.migrate_model_registry %*
-) else (
-  python -m scripts.migrate_model_registry %*
+
+if not exist ".venv\Scripts\python.exe" (
+  echo ERROR: Project environment missing. Run scripts\first_setup.cmd first.
+  exit /b 1
 )
-if errorlevel 1 pause
-endlocal
+
+".venv\Scripts\python.exe" -m scripts.migrate_model_registry %*
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" pause
+endlocal & exit /b %RC%
