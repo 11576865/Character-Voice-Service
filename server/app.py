@@ -21,11 +21,13 @@ from server.model_registry import (
     scan_model_root,
     sha256_file,
 )
+from server.runtime_registry import load_runtime_registry
 from server.runtime_supervisor import (
     RuntimeConflictError,
     RuntimeSupervisorError,
     runtime_supervisor,
 )
+from server.system_graph import build_system_graph, trace_voice
 from server.voice_profiles import (
     iter_real_profile_paths,
     public_profile_summary,
@@ -128,6 +130,7 @@ def root():
         "models": "/v1/models",
         "engines": "/v1/engines",
         "runtime": "/v1/runtime",
+        "system_graph": "/v1/system/graph",
         "speech": "/v1/audio/speech",
         "docs": "/docs",
     }
@@ -158,6 +161,24 @@ def runtime_info():
         return runtime_supervisor.diagnostics()
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=500, detail=f"Runtime Registry error: {exc}") from exc
+
+
+@app.get("/v1/system/graph", dependencies=[Depends(require_admin)])
+def system_graph():
+    try:
+        return build_system_graph()
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"System Graph error: {exc}") from exc
+
+
+@app.get("/v1/system/voices/{voice_id}/trace", dependencies=[Depends(require_admin)])
+def system_voice_trace(voice_id: str):
+    try:
+        return trace_voice(voice_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"System Graph error: {exc}") from exc
 
 
 @app.post("/v1/admin/runtime/{engine_id}/start", dependencies=[Depends(require_admin)])
@@ -297,6 +318,10 @@ def speech(request: SpeechRequest):
     except RuntimeSupervisorError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    runtime_spec = load_runtime_registry().get(selected_engine)
+    runtime_identity = runtime_spec.runtime_id if runtime_spec else None
+    runtime_revision = runtime_spec.configuration_revision if runtime_spec else None
+
     audio = synthesize(text=request.input, speed=request.speed, profile=selection)
     saved_path = save_wav(audio)
 
@@ -310,6 +335,8 @@ def speech(request: SpeechRequest):
             {
                 "voice": request.voice,
                 "engine": selected_engine,
+                "runtime_id": runtime_identity,
+                "runtime_revision": runtime_revision,
                 "adapter_api_version": selected_model.get("adapter_api_version", "1"),
                 "model_id": model_identity,
                 "model_revision": revision,
@@ -341,6 +368,10 @@ def speech(request: SpeechRequest):
         "X-Selected-Reference": selection["selected_reference"]["id"],
         "X-Reference-Reason": selection_reason,
     }
+    if runtime_identity:
+        headers["X-CVS-Runtime"] = str(runtime_identity)
+    if runtime_revision:
+        headers["X-CVS-Runtime-Revision"] = str(runtime_revision)
     if revision:
         headers["X-CVS-Model-Revision"] = str(revision)
     if binding:
