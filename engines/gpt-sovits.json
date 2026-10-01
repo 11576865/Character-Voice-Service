@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "engine_id": "gpt-sovits",
+  "name": "GPT-SoVITS",
+  "capability_kind": "speech-synthesis",
+  "adapter_kind": "builtin:gpt-sovits",
+  "capabilities": {
+    "zero_shot": true,
+    "fine_tuned_model": true,
+    "audio_streaming": false,
+    "text_streaming": false,
+    "emotion": "reference",
+    "speed_control": "backend-dependent",
+    "pronunciation_control": "limited",
+    "max_concurrency": 1,
+    "supports_cancel": false,
+    "model_switch_cost": "high"
+  },
+  "protocol": {},
+  "metadata": {
+    "family": "GPT-SoVITS"
+  }
+}
