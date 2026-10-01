@@ -102,3 +102,60 @@ def test_supervisor_starts_health_checks_and_stops_owned_runtime(tmp_path):
         stopped = supervisor.stop("test-engine")
     assert stopped["status"] == "stopped"
     assert stopped["managed_by_supervisor"] is False
+
+
+def test_external_runtime_activation_writes_supervisor_request(tmp_path, monkeypatch):
+    registry_path = tmp_path / "registry.json"
+    request_dir = tmp_path / "control" / "requests"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "engines": {
+                    "index-tts": {
+                        "enabled": True,
+                        "mode": "external",
+                        "runtime_id": "index-tts-2.5-local",
+                        "runtime_version": "2.5",
+                        "health_url": "http://127.0.0.1:9882/health",
+                        "endpoint": "http://127.0.0.1:9882",
+                        "start_on_demand": True,
+                        "exclusive_group": "gpu-0",
+                        "startup_timeout": 5,
+                        "shutdown_timeout": 5,
+                        "lifecycle_owner": "system-supervisor",
+                        "external_control": {
+                            "mode": "file",
+                            "request_dir": str(request_dir),
+                            "service_key": "IndexTTS",
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    supervisor = RuntimeSupervisor(registry_path=registry_path)
+    health_results = iter([
+        (False, "offline"),
+        (False, "starting"),
+        (True, None),
+        (True, None),
+    ])
+    monkeypatch.setattr(
+        supervisor,
+        "_health",
+        lambda spec, timeout=1.5: next(health_results, (True, None)),
+    )
+
+    result = supervisor.ensure_ready("index-tts")
+    assert result is not None
+
+    requests = list(request_dir.glob("*.json"))
+    assert len(requests) == 1
+    payload = json.loads(requests[0].read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["action"] == "activate-engine"
+    assert payload["engine_id"] == "index-tts"
+    assert payload["service_key"] == "IndexTTS"
