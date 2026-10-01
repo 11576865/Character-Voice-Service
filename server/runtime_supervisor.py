@@ -130,6 +130,39 @@ class RuntimeSupervisor:
         env.update(spec.env)
         return env
 
+    @staticmethod
+    def _external_supervisor_status(spec: RuntimeSpec) -> dict | None:
+        control = spec.external_control or {}
+        status_file = str(control.get("status_file") or "").strip()
+        service_key = str(control.get("service_key") or "").strip()
+        if not status_file or not service_key:
+            return None
+        path = Path(status_file).expanduser()
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        services = payload.get("services") if isinstance(payload, dict) else None
+        if not isinstance(services, list):
+            return None
+        for item in services:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("key") or "") != service_key:
+                continue
+            return {
+                "supervisor_session": payload.get("session_id"),
+                "supervisor_version": payload.get("supervisor_version"),
+                "supervisor_state": item.get("state"),
+                "supervisor_detail": item.get("detail"),
+                "pid": item.get("root_pid") or item.get("worker_pid"),
+                "listener_pid": item.get("listener_pid"),
+                "service_key": service_key,
+            }
+        return None
+
     def _clean_exited(self, engine_id: str) -> None:
         owned = self._owned.get(engine_id)
         if not owned:
@@ -176,15 +209,25 @@ class RuntimeSupervisor:
             else:
                 state = "stopped"
 
+            external = self._external_supervisor_status(spec) if not spec.managed else None
+            external_pid = external.get("pid") if external else None
+            external_state = str(external.get("supervisor_state") or "") if external else ""
+            if external_state:
+                state = external_state.lower().replace(" ", "-")
+
             return {
                 "engine": engine_id,
+                "runtime_id": spec.runtime_id,
+                "runtime_revision": spec.configuration_revision,
                 "configured": True,
                 "enabled": spec.enabled,
                 "mode": spec.mode,
+                "lifecycle_owner": spec.lifecycle_owner,
                 "status": state,
                 "ready": ready,
                 "managed_by_supervisor": process_running,
-                "pid": owned.process.pid if process_running else None,
+                "pid": owned.process.pid if process_running else external_pid,
+                "external_supervisor": external,
                 "endpoint": spec.endpoint,
                 "health_url": spec.health_url,
                 "exclusive_group": spec.exclusive_group,
