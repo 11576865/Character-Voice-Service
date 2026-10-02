@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "adapter_version": 2,
   "project": "Character-Voice-Service",
   "repository": "11576865/Character-Voice-Service",
   "foundry": "11576865/UIGS-Foundry",
@@ -10,6 +11,7 @@
   },
   "auto_capture": {
     "ci_failures": true,
+    "failed_job_steps": true,
     "manual_dispatch": true,
     "canonical_promotion": false
   },
