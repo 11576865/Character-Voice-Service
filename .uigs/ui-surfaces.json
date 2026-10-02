@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "project": "Character-Voice-Service",
+  "repository": "11576865/Character-Voice-Service",
+  "platform": "service-no-built-in-ui",
+  "authority": "this repository",
+  "scope_note": "Current repository is a local/API service and contains no built-in HTML/CSS/JS application UI. Client UIs belong to separate projects such as Character Voice Reader.",
+  "surface_count": 0,
+  "surfaces": []
+}
