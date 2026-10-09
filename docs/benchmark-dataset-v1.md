@@ -10,30 +10,30 @@ copying private speech into Git.
 
 Prepare a UTF-8 JSONL file with one explicit record per source WAV:
 
-\`\`\`json
+```json
 {"id":"line-0001","audio":"session-a/0001.wav","text":"Example sentence.","language":"en","source":"ORIGINAL","split":"train","reference":true,"style":"neutral"}
 {"id":"line-0002","audio":"session-a/0002.wav","text":"Another example.","language":"en","source":"ORIGINAL","split":"test-recorded","style":"surprised"}
-\`\`\`
+```
 
-\`audio\` is a POSIX-style path relative to \`--audio-root\`. The path must point to
+`audio` is a POSIX-style path relative to `--audio-root`. The path must point to
 an existing, nonempty, readable PCM WAV **within** that root. The only accepted
-source type for this corpus is \`ORIGINAL\`; synthetic generations require a
+source type for this corpus is `ORIGINAL`; synthetic generations require a
 separate dataset with different provenance rules. The tool never infers the
 transcript or the emotion, and does not select references automatically.
 
 Choose each split deliberately. Supported roles:
 
-- \`train\`: optional role for adapting a model;
-- \`dev\`: hyperparameter/checkpoint selection;
-- \`test-recorded\`: original held-out audio used for evaluation;
-- \`reference\`: optional exclusive split for fixed zero-shot speaker/style prompts.
-  Alternatively, set \`"reference": true\` on a \`train\` or \`dev\` item to
+- `train`: optional role for adapting a model;
+- `dev`: hyperparameter/checkpoint selection;
+- `test-recorded`: original held-out audio used for evaluation;
+- `reference`: optional exclusive split for fixed zero-shot speaker/style prompts.
+  Alternatively, set `"reference": true` on a `train` or `dev` item to
   include it in the reference pool **without duplicating the WAV**. A
-  \`test-recorded\` item can never be a reference.
+  `test-recorded` item can never be a reference.
 
 A useful *planning target* for a 400-clip corpus is 300 train, 40 dev and 60
 test clips, with a curated reference pool of 5–10 non-test clips. Reference
-prompts may be selected from train/dev (via \`reference: true\`), avoiding a
+prompts may be selected from train/dev (via `reference: true`), avoiding a
 misleading requirement for 405–410 distinct source files. Actual counts
 must be grounded in the real inventory; the tool does **not** fabricate missing
 clips or enforce these illustrative numbers. Never put test audio in train, dev
@@ -46,29 +46,29 @@ text alone is **not** proof of identical audio.
 
 From the CVS repository root (using the CVS Python environment):
 
-\`\`\`powershell
-python -m scripts.freeze_benchmark_dataset freeze \`
-  --input D:\cvs-private\march7-reviewed.jsonl \`
-  --audio-root D:\cvs-private\march7-wav \`
-  --output data\benchmarks\march7-en-v1.json \`
+```powershell
+python -m scripts.freeze_benchmark_dataset freeze `
+  --input D:\cvs-private\march7-reviewed.jsonl `
+  --audio-root D:\cvs-private\march7-wav `
+  --output data\benchmarks\march7-en-v1.json `
   --dataset-id march7-en-v1
 
-python -m scripts.freeze_benchmark_dataset verify \`
-  --manifest data\benchmarks\march7-en-v1.json \`
+python -m scripts.freeze_benchmark_dataset verify `
+  --manifest data\benchmarks\march7-en-v1.json `
   --audio-root D:\cvs-private\march7-wav
-\`\`\`
+```
 
 The manifest stores relative names, exact transcript bytes, PCM metadata,
 SHA-256 of each original WAV and transcript, explicit split membership and a
-canonical content fingerprint (\`dataset_sha256\`). It stores no machine-absolute
-paths and contains no embedded audio. Running \`freeze\` again with identical
+canonical content fingerprint (`dataset_sha256`). It stores no machine-absolute
+paths and contains no embedded audio. Running `freeze` again with identical
 inputs is idempotent; a changed split/transcript/WAV cannot silently overwrite
 an existing frozen manifest. Use a **new dataset ID and output filename** for an
 intentional new dataset version. Keep original WAVs immutable in your private
-archive. \`verify\` checks the manifest fingerprint and re-hashes *every* WAV.
+archive. `verify` checks the manifest fingerprint and re-hashes *every* WAV.
 
 Since private transcriptions are included, store the curated JSONL and frozen
-manifest in private \`data/\` or other non-public storage, not the public repo.
+manifest in private `data/` or other non-public storage, not the public repo.
 
 ## Evidence boundary and next step
 
@@ -78,4 +78,4 @@ TTFA, MOS or prove that a model is promotable. It also does not create the
 separate 60-sentence unseen-text set or 20-paragraph long-form set. Those should
 be frozen as subsequent suites with their own identities before introducing an
 engine-neutral voicebench runner. A later evaluation record should bind to
-\`dataset_sha256\`, model revision and the selected reference IDs.
+`dataset_sha256`, model revision and the selected reference IDs.
