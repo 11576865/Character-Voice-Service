@@ -45,3 +45,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ```
 
 运行时状态可通过受管理员令牌保护的 `GET /v1/runtime` 查看（请求头 `X-CVS-Token`）。已登记且启用 `start_on_demand` 的引擎会在首次请求时由 Runtime Supervisor 使用各自的 Python 绝对路径启动。
+
+## 固定角色语音评测数据集
+
+运行跨引擎语音评测前，先使用 [`Benchmark Dataset v1`](docs/benchmark-dataset-v1.md) 将人工校对的原始 WAV/文本及 Train/Dev/Test/Reference 成员关系冻结为带 SHA-256 的私有 manifest。该步骤不修改原始 WAV，也不自动进行语音合成或质量评分。
