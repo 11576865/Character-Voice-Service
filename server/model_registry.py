@@ -348,6 +348,8 @@ def resolve_model(
     _, entry = _entry(model_id, registry_path)
     if not entry.get("present", True):
         raise ValueError(f"model is not present in Model Root: {model_id}")
+    if entry.get("status") == "quarantined" or entry.get("integrity_error"):
+        raise ValueError(f"model is quarantined pending integrity review: {model_id}")
 
     manifest_rel = str(entry.get("manifest") or "").strip()
     if not manifest_rel:
