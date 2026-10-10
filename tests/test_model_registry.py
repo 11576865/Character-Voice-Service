@@ -374,3 +374,54 @@ def test_successive_registry_writes_never_leave_staging_files(tmp_path):
         }, "defaults": {}}, path)
         assert model_registry.load_registry(path)["models"]["model"]["revision"] == number
     assert list(tmp_path.glob("registry.json.*.tmp")) == []
+
+
+@pytest.mark.parametrize("different_manifest", [False, True])
+def test_duplicate_model_ids_are_ambiguous_even_if_manifests_match(tmp_path, different_manifest):
+    import shutil
+
+    model_root = tmp_path / "models"
+    registry = tmp_path / "registry.json"
+    original_manifest = make_manifest(model_root)
+    original_dir = original_manifest.parent
+    second_dir = model_root / "another-voice" / "gpt-sovits" / "same-model-id"
+    shutil.copytree(original_dir, second_dir)
+    if different_manifest:
+        duplicate = second_dir / "model.json"
+        document = json.loads(duplicate.read_text(encoding="utf-8"))
+        document["name"] = "same ID, different model manifest"
+        duplicate.write_text(json.dumps(document), encoding="utf-8")
+
+    report = model_registry.scan_model_root(model_root=model_root, registry_path=registry)
+    assert report["discovered"] == 0
+    assert any("duplicate model_id" in error["error"] for error in report["invalid"])
+    assert "march7-gsv-v4-a" not in model_registry.load_registry(registry)["models"]
+
+
+def test_duplicate_models_quarantine_existing_default_and_disable_auto_selection(tmp_path):
+    import shutil
+
+    model_root = tmp_path / "models"
+    registry = tmp_path / "registry.json"
+    original_manifest = make_manifest(model_root)
+    model_registry.scan_model_root(model_root=model_root, registry_path=registry)
+    model_registry.set_status("march7-gsv-v4-a", "validated", registry_path=registry)
+    model_registry.promote_model(
+        "march7-gsv-v4-a", registry_path=registry,
+        model_root=model_root, require_evaluation=False,
+    )
+    assert model_registry.default_model_id("march-7th", registry_path=registry) == "march7-gsv-v4-a"
+    duplicate_dir = model_root / "conflict" / "same-id"
+    shutil.copytree(original_manifest.parent, duplicate_dir)
+
+    report = model_registry.scan_model_root(model_root=model_root, registry_path=registry)
+    data = model_registry.load_registry(registry)
+    assert report["invalid"]
+    assert data["models"]["march7-gsv-v4-a"]["status"] == "quarantined"
+    assert data["models"]["march7-gsv-v4-a"]["present"] is False
+    assert data["defaults"]["march-7th"] == "march7-gsv-v4-a"  # retained for human inspection
+    assert model_registry.default_model_id("march-7th", registry_path=registry) is None
+    listed = model_registry.list_models(model_root=model_root, registry_path=registry)
+    assert listed[0]["default_for_voice"] is False
+    with pytest.raises(ValueError, match="not present"):
+        model_registry.resolve_model("march7-gsv-v4-a", model_root=model_root, registry_path=registry)
