@@ -223,6 +223,7 @@ def scan_model_root(
     registry = load_registry(registry_path)
 
     discovered: dict[str, dict] = {}
+    duplicate_ids: set[str] = set()
     invalid: list[dict] = []
 
     for manifest_path in sorted(model_root.rglob(MANIFEST_FILENAME)):
@@ -234,12 +235,21 @@ def scan_model_root(
 
         model_id = model["model_id"]
         relative_manifest = _registry_relative(manifest_path, model_root)
-        previous = discovered.get(model_id)
-
-        if previous and previous["manifest_sha256"] != model["manifest_sha256"]:
+        if model_id in duplicate_ids:
             invalid.append({
                 "manifest": relative_manifest,
-                "error": f"duplicate model_id with different manifest: {model_id}",
+                "error": f"duplicate model_id: {model_id}",
+            })
+            continue
+
+        if model_id in discovered:
+            # Two copies of an identical manifest are still ambiguous:
+            # changing scan order must not change the Model Root locator.
+            duplicate_ids.add(model_id)
+            discovered.pop(model_id)
+            invalid.append({
+                "manifest": relative_manifest,
+                "error": f"duplicate model_id across directories: {model_id}",
             })
             continue
 
@@ -290,6 +300,17 @@ def scan_model_root(
             "discovered_at": first_seen,
             "updated_at": now,
         }
+
+    # Conflicting physical identities cannot safely retain any previous
+    # default/validated status. Existing entries stay inspectable but cannot
+    # be resolved or promoted while the collision remains.
+    for model_id in duplicate_ids:
+        existing = registry["models"].get(model_id)
+        if isinstance(existing, dict):
+            existing["status"] = "quarantined"
+            existing["present"] = False
+            existing["updated_at"] = now
+            existing["integrity_error"] = "duplicate model_id in Model Root"
 
     discovered_ids = set(discovered)
     for model_id, entry in registry["models"].items():
@@ -365,7 +386,12 @@ def list_models(
             "status": entry.get("status"),
             "present": bool(entry.get("present", True)),
             "revision": entry.get("revision"),
-            "default_for_voice": registry.get("defaults", {}).get(entry.get("voice_id")) == model_id,
+            "default_for_voice": (
+                entry.get("status") == "default"
+                and entry.get("present") is True
+                and not entry.get("integrity_error")
+                and registry.get("defaults", {}).get(entry.get("voice_id")) == model_id
+            ),
         }
         if item["present"]:
             try:
@@ -387,7 +413,11 @@ def default_model_id(
     voice_id = _require_id(voice_id, "voice_id")
     registry = load_registry(registry_path)
     model_id = registry.get("defaults", {}).get(voice_id)
-    return str(model_id) if model_id else None
+    entry = registry["models"].get(model_id)
+    if (not isinstance(entry, dict) or entry.get("status") != "default"
+            or entry.get("present") is not True or entry.get("integrity_error")):
+        return None
+    return str(model_id)
 
 
 def set_status(
