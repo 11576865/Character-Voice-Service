@@ -24,8 +24,10 @@ def _canonical(value: dict) -> bytes:
 def _number(value: object, label: str, *, positive: bool = False) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError(f"{label} must be a finite number")
-    if value <= 0 if positive else value < 0:
-        raise ValueError(f"{label} must be positive" if positive else f"{label} cannot be negative")
+    if positive and value <= 0:
+        raise ValueError(f"{label} must be positive")
+    if not positive and value < 0:
+        raise ValueError(f"{label} cannot be negative")
     return float(value)
 
 
@@ -147,6 +149,13 @@ def compare_runs(
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     if manifest.get("dataset_id") != checked["dataset_id"] or manifest.get("dataset_sha256") != checked["dataset_sha256"]:
         raise ValueError("frozen manifest changed during verification")
+    fingerprint_payload = {
+        "schema_version": manifest.get("schema_version"),
+        "dataset_id": manifest["dataset_id"],
+        "items": manifest.get("items"),
+    }
+    if hashlib.sha256(_canonical(fingerprint_payload)).hexdigest() != checked["dataset_sha256"]:
+        raise ValueError("frozen manifest contents changed after source verification")
     test_ids = sorted(row["id"] for row in manifest["items"] if row["split"] == "test-recorded")
     if not test_ids:
         raise ValueError("no frozen test-recorded samples")
