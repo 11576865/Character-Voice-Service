@@ -425,3 +425,21 @@ def test_duplicate_models_quarantine_existing_default_and_disable_auto_selection
     assert listed[0]["default_for_voice"] is False
     with pytest.raises(ValueError, match="not present"):
         model_registry.resolve_model("march7-gsv-v4-a", model_root=model_root, registry_path=registry)
+
+
+def test_scan_reports_external_manifest_symlink_without_aborting(tmp_path):
+    external_root = tmp_path / "external"
+    external_manifest = make_manifest(external_root)
+    model_root = tmp_path / "models"
+    registry = tmp_path / "registry.json"
+    link = model_root / "foreign" / "model.json"
+    link.parent.mkdir(parents=True)
+    try:
+        link.symlink_to(external_manifest)
+    except (OSError, NotImplementedError):
+        pytest.skip("manifest symlinks not supported by this test filesystem")
+
+    report = model_registry.scan_model_root(model_root=model_root, registry_path=registry)
+    assert report["discovered"] == 0
+    assert report["invalid"]
+    assert not model_registry.load_registry(registry)["models"]
