@@ -59,3 +59,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 可复核的跨引擎运行对照
 
 通过 [voicebench A/B audit v1](docs/voicebench-comparison-v1.md)，在重新校验冻结数据集和两次运行的输出 WAV 后，生成一份仅包含描述性生成性能与身份信息的对照报告。该报告不推断音质优劣，也不自动推动模型晋升。
+
+## 模型资产与注册表完整性
+
+模型晋升前重新验证 Model Root 中的原始 manifest 和全部权重 SHA-256；即使内部显式跳过评测检查，也不能跳过资产完整性检查。同一 `model_id` 对应多份物理清单时会隔离，失效的默认映射不再用于自动选型。详情见 [Evaluation Provenance v1.1](docs/evaluation-provenance-v1.md)。注册表采用原子快照写入，但仍要求调用方串行提交变更。
