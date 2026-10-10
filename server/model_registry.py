@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -79,10 +80,23 @@ def load_registry(path: Path = REGISTRY_PATH) -> dict:
 
 
 def save_registry(data: dict, path: Path = REGISTRY_PATH) -> None:
+    """Atomically publish one complete registry snapshot.
+
+    Independent calls must still be serialized by their owner: atomic
+    replacement protects readers against partial JSON, not lost updates
+    from simultaneous writers.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    staging = path.with_suffix(path.suffix + ".tmp")
-    staging.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    staging.replace(path)
+    staging = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with staging.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(staging, path)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def _relative_artifact_path(value: object, field: str) -> Path:
@@ -209,23 +223,36 @@ def scan_model_root(
     registry = load_registry(registry_path)
 
     discovered: dict[str, dict] = {}
+    duplicate_ids: set[str] = set()
     invalid: list[dict] = []
 
     for manifest_path in sorted(model_root.rglob(MANIFEST_FILENAME)):
         try:
+            # Resolve provenance path inside the guarded block: a model.json
+            # symlink can point outside Model Root even when rglob found it
+            # inside. It must be reported invalid, not abort the entire scan.
+            relative_manifest = _registry_relative(manifest_path, model_root)
             model = validate_manifest(manifest_path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             invalid.append({"manifest": str(manifest_path), "error": str(exc)})
             continue
 
         model_id = model["model_id"]
-        relative_manifest = _registry_relative(manifest_path, model_root)
-        previous = discovered.get(model_id)
-
-        if previous and previous["manifest_sha256"] != model["manifest_sha256"]:
+        if model_id in duplicate_ids:
             invalid.append({
                 "manifest": relative_manifest,
-                "error": f"duplicate model_id with different manifest: {model_id}",
+                "error": f"duplicate model_id: {model_id}",
+            })
+            continue
+
+        if model_id in discovered:
+            # Two copies of an identical manifest are still ambiguous:
+            # changing scan order must not change the Model Root locator.
+            duplicate_ids.add(model_id)
+            discovered.pop(model_id)
+            invalid.append({
+                "manifest": relative_manifest,
+                "error": f"duplicate model_id across directories: {model_id}",
             })
             continue
 
@@ -277,6 +304,17 @@ def scan_model_root(
             "updated_at": now,
         }
 
+    # Conflicting physical identities cannot safely retain any previous
+    # default/validated status. Existing entries stay inspectable but cannot
+    # be resolved or promoted while the collision remains.
+    for model_id in duplicate_ids:
+        existing = registry["models"].get(model_id)
+        if isinstance(existing, dict):
+            existing["status"] = "quarantined"
+            existing["present"] = False
+            existing["updated_at"] = now
+            existing["integrity_error"] = "duplicate model_id in Model Root"
+
     discovered_ids = set(discovered)
     for model_id, entry in registry["models"].items():
         if model_id not in discovered_ids:
@@ -310,6 +348,8 @@ def resolve_model(
     _, entry = _entry(model_id, registry_path)
     if not entry.get("present", True):
         raise ValueError(f"model is not present in Model Root: {model_id}")
+    if entry.get("status") == "quarantined" or entry.get("integrity_error"):
+        raise ValueError(f"model is quarantined pending integrity review: {model_id}")
 
     manifest_rel = str(entry.get("manifest") or "").strip()
     if not manifest_rel:
@@ -351,7 +391,12 @@ def list_models(
             "status": entry.get("status"),
             "present": bool(entry.get("present", True)),
             "revision": entry.get("revision"),
-            "default_for_voice": registry.get("defaults", {}).get(entry.get("voice_id")) == model_id,
+            "default_for_voice": (
+                entry.get("status") == "default"
+                and entry.get("present") is True
+                and not entry.get("integrity_error")
+                and registry.get("defaults", {}).get(entry.get("voice_id")) == model_id
+            ),
         }
         if item["present"]:
             try:
@@ -373,7 +418,11 @@ def default_model_id(
     voice_id = _require_id(voice_id, "voice_id")
     registry = load_registry(registry_path)
     model_id = registry.get("defaults", {}).get(voice_id)
-    return str(model_id) if model_id else None
+    entry = registry["models"].get(model_id)
+    if (not isinstance(entry, dict) or entry.get("status") != "default"
+            or entry.get("present") is not True or entry.get("integrity_error")):
+        return None
+    return str(model_id)
 
 
 def set_status(
@@ -398,12 +447,29 @@ def promote_model(
     require_evaluation: bool = True,
     evaluation_dir: Path | None = None,
     benchmark_dir: Path | None = None,
+    model_root: Path = MODEL_ROOT,
 ) -> None:
     from server.evaluation_registry import model_is_promotable
 
     registry, entry = _entry(model_id, registry_path)
+    if entry.get("scope", "voice-bound") == "shared":
+        raise ValueError("shared models cannot be promoted as a per-voice default")
     if entry.get("status") not in {"validated", "default"}:
         raise ValueError("only a validated model can be promoted")
+    if entry.get("present") is not True:
+        raise ValueError("model is not present in Model Root; cannot promote")
+    if entry.get("integrity_error"):
+        raise ValueError("quarantined model integrity error; cannot promote")
+
+    # The persisted registry and evaluation are only claims. Re-hash the
+    # currently installed immutable manifest and ALL recorded artifact bytes
+    # before creating or changing a serving default, even with an explicit
+    # require_evaluation=False administrative override.
+    resolved = resolve_model(model_id, model_root=model_root, registry_path=registry_path)
+    if (resolved.get("revision") != entry.get("revision")
+            or resolved.get("scope") != entry.get("scope", "voice-bound")
+            or resolved.get("voice_id") != entry.get("voice_id")):
+        raise ValueError("model identity changed since registry scan; cannot promote")
     if require_evaluation:
         evaluation_options = {"model_revision": entry.get("revision")}
         if evaluation_dir is not None:
@@ -413,8 +479,6 @@ def promote_model(
         if not model_is_promotable(model_id, **evaluation_options):
             raise ValueError("model has no provenance-matched promotable validated evaluation")
 
-    if entry.get("scope", "voice-bound") == "shared":
-        raise ValueError("shared models cannot be promoted as a per-voice default")
     voice_id = _require_id(entry.get("voice_id"), "voice_id")
     previous_id = registry.get("defaults", {}).get(voice_id)
     if previous_id and previous_id != model_id:
