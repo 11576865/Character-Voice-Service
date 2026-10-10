@@ -197,9 +197,9 @@ def test_real_model_registry_promotion_requires_matching_revision(tmp_path):
     evaluation_registry.write_evaluation(_evaluation(report), directory=evaluations)
     with pytest.raises(ValueError, match="provenance"):
         model_registry.promote_model("march7-gsv-v4-a", registry_path=registry,
-                                     evaluation_dir=evaluations, benchmark_dir=benchmarks)
+                                     evaluation_dir=evaluations, benchmark_dir=benchmarks, model_root=model_root)
     evaluation_registry.write_evaluation(_evaluation(report, revision=actual_revision, eval_id="correct"),
                                          directory=evaluations)
     model_registry.promote_model("march7-gsv-v4-a", registry_path=registry,
-                                 evaluation_dir=evaluations, benchmark_dir=benchmarks)
+                                 evaluation_dir=evaluations, benchmark_dir=benchmarks, model_root=model_root)
     assert model_registry.load_registry(registry)["defaults"]["march-7th"] == "march7-gsv-v4-a"
