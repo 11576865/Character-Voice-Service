@@ -630,6 +630,17 @@ def _copy_immutable(
         staging.unlink(missing_ok=True)
 
 
+def _import_model_id(voice_id: str, source_model_id: str, version: str, identity_hash: str) -> str:
+    """Preserve source-content identity when the descriptive prefix is long."""
+    if not re.fullmatch(r"[0-9a-f]{12}", identity_hash):
+        raise ValueError("model import fingerprint requires twelve lowercase hex digits")
+    prefix = _safe_component(f"{voice_id}-gpt-sovits-{version}-{source_model_id}")
+    # Reserve the entire suffix, including its separator, before truncation.
+    prefix = prefix[:127 - 1 - len(identity_hash)].rstrip(".-_") or "model"
+    model_id = f"{prefix}-{identity_hash}"
+    return _require_id(model_id, "model_id")
+
+
 def _equivalent_import_manifest(existing: dict, proposed: dict) -> bool:
     """Only the creation timestamp may vary across an idempotent retry."""
     if not isinstance(existing, dict):
@@ -667,12 +678,7 @@ def import_gpt_sovits_model(
     ).hexdigest()[:12]
 
     engine_version = str(version or "").strip() or "unknown"
-    prefix = _safe_component(f"{voice_id}-gpt-sovits-{engine_version}-{source_model_id}")
-    # Reserve the suffix before truncating so different weight pairs cannot
-    # collapse to the same ID solely because the descriptive prefix is long.
-    prefix = prefix[:127 - 1 - len(identity_hash)].rstrip(".-_") or "model"
-    model_id = f"{prefix}-{identity_hash}"
-    _require_id(model_id, "model_id")
+    model_id = _import_model_id(voice_id, source_model_id, engine_version, identity_hash)
 
     model_dir = (
         model_root.expanduser()
