@@ -49,3 +49,5 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 固定角色语音评测数据集
 
 运行跨引擎语音评测前，先使用 [`Benchmark Dataset v1`](docs/benchmark-dataset-v1.md) 将人工校对的原始 WAV/文本及 Train/Dev/Test/Reference 成员关系冻结为带 SHA-256 的私有 manifest。该步骤不修改原始 WAV，也不自动进行语音合成或质量评分。
+
+评测登记与模型晋升另遵循 [Evaluation Provenance v1.1](docs/evaluation-provenance-v1.md)：历史 v1.0 评测可读取，但没有数据集指纹、模型修订和参考成员关系的记录不能再批准模型晋升。

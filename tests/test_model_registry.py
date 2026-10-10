@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from server import evaluation_registry, model_registry
+from server import model_registry
 
 
 def write_weight(path: Path, content: bytes):
@@ -110,21 +110,23 @@ def test_promotion_requires_validated_status_and_promotable_evaluation(tmp_path)
             evaluation_dir=evaluations,
         )
 
-    evaluation_registry.write_evaluation({
-        "evaluation_id": "eval-1",
+    # Legacy records are readable for history but cannot authorize promotion.
+    evaluations.mkdir()
+    (evaluations / "legacy.json").write_text(json.dumps({
+        "schema_version": "1.0",
+        "evaluation_id": "legacy",
         "model_id": "march7-gsv-v4-a",
         "model_sha256": "x",
         "decision": {"status": "validated", "promotable": True},
-    }, directory=evaluations)
+    }), encoding="utf-8")
 
-    model_registry.promote_model(
-        "march7-gsv-v4-a",
-        registry_path=registry,
-        evaluation_dir=evaluations,
-    )
-    data = model_registry.load_registry(registry)
-    assert data["defaults"]["march-7th"] == "march7-gsv-v4-a"
-    assert data["models"]["march7-gsv-v4-a"]["status"] == "default"
+    with pytest.raises(ValueError, match="provenance"):
+        model_registry.promote_model(
+            "march7-gsv-v4-a",
+            registry_path=registry,
+            evaluation_dir=evaluations,
+        )
+    assert model_registry.load_registry(registry)["defaults"] == {}
 
 
 def test_migrate_profile_imports_legacy_weights_as_immutable_artifacts(tmp_path, monkeypatch):
