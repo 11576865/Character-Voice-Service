@@ -209,7 +209,7 @@ def run_voicebench(
         _validate_resume(saved, settings, samples, output_dir)
 
     own_client = client is None
-    http = client or httpx.Client(base_url=base_url, timeout=timeout, follow_redirects=False)
+    http = client or httpx.Client(base_url=base_url, timeout=timeout, follow_redirects=False, trust_env=False)
     try:
         _confirm_reference(http, voice=voice, reference_id=reference_id,
                            admin_token=admin_token, expected_hash=references[0]["audio_sha256"])
