@@ -103,7 +103,7 @@ def _registry_write_lock(path: Path, *, timeout: float = 120.0):
 
             lock_file.seek(0, 2)
             if lock_file.tell() == 0:
-                lock_file.write(b"\\0")
+                lock_file.write(b"\0")
                 lock_file.flush()
             lock_file.seek(0)
             lock = lambda: msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
@@ -136,9 +136,9 @@ def _save_registry_unlocked(data: dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     staging = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
-        with staging.open("x", encoding="utf-8", newline="\\n") as stream:
+        with staging.open("x", encoding="utf-8", newline="\n") as stream:
             json.dump(data, stream, ensure_ascii=False, indent=2)
-            stream.write("\\n")
+            stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(staging, path)
@@ -154,6 +154,7 @@ def save_registry(data: dict, path: Path = REGISTRY_PATH) -> None:
     """
     with _registry_write_lock(path):
         _save_registry_unlocked(data, path)
+
 
 def _relative_artifact_path(value: object, field: str) -> Path:
     raw = str(value or "").strip()
