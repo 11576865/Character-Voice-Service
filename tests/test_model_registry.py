@@ -99,6 +99,7 @@ def test_promotion_requires_validated_status_and_promotable_evaluation(tmp_path)
             "march7-gsv-v4-a",
             registry_path=registry,
             evaluation_dir=evaluations,
+            model_root=model_root,
         )
 
     model_registry.set_status("march7-gsv-v4-a", "validated", registry_path=registry)
@@ -108,6 +109,7 @@ def test_promotion_requires_validated_status_and_promotable_evaluation(tmp_path)
             "march7-gsv-v4-a",
             registry_path=registry,
             evaluation_dir=evaluations,
+            model_root=model_root,
         )
 
     # Legacy records are readable for history but cannot authorize promotion.
@@ -125,6 +127,7 @@ def test_promotion_requires_validated_status_and_promotable_evaluation(tmp_path)
             "march7-gsv-v4-a",
             registry_path=registry,
             evaluation_dir=evaluations,
+            model_root=model_root,
         )
     assert model_registry.load_registry(registry)["defaults"] == {}
 
