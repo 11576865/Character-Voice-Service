@@ -63,3 +63,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 模型资产与注册表完整性
 
 模型晋升前重新验证 Model Root 中的原始 manifest 和全部权重 SHA-256；即使内部显式跳过评测检查，也不能跳过资产完整性检查。同一 `model_id` 对应多份物理清单时会隔离，失效的默认映射不再用于自动选型。详情见 [Evaluation Provenance v1.1](docs/evaluation-provenance-v1.md)。注册表采用原子快照写入，但仍要求调用方串行提交变更。
+
+## Model Registry 并发事务
+
+[Model Registry transaction boundary v1](docs/model-registry-transactions-v1.md) 使用跨进程系统文件锁，将扫描、生命周期状态修改、模型晋升和退休操作的完整「读取—修改—持久化」过程串行化。锁文件不应人工删除。此机制防止协作进程的丢失更新，但不替代受控模型目录、完整性检查或数据库事务。
