@@ -228,13 +228,16 @@ def scan_model_root(
 
     for manifest_path in sorted(model_root.rglob(MANIFEST_FILENAME)):
         try:
+            # Resolve provenance path inside the guarded block: a model.json
+            # symlink can point outside Model Root even when rglob found it
+            # inside. It must be reported invalid, not abort the entire scan.
+            relative_manifest = _registry_relative(manifest_path, model_root)
             model = validate_manifest(manifest_path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             invalid.append({"manifest": str(manifest_path), "error": str(exc)})
             continue
 
         model_id = model["model_id"]
-        relative_manifest = _registry_relative(manifest_path, model_root)
         if model_id in duplicate_ids:
             invalid.append({
                 "manifest": relative_manifest,
