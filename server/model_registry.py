@@ -68,6 +68,9 @@ def _empty_registry() -> dict:
 
 
 def load_registry(path: Path = REGISTRY_PATH) -> dict:
+    # Canonicalize a configured alias so readers and writers refer to the
+    # same physical registry file rather than replacing a symlink itself.
+    path = Path(path).expanduser().resolve()
     if not path.is_file():
         return _empty_registry()
 
@@ -133,6 +136,7 @@ def _registry_write_lock(path: Path, *, timeout: float = 120.0):
 
 def _save_registry_unlocked(data: dict, path: Path) -> None:
     """Only call inside _registry_write_lock (or from save_registry)."""
+    path = Path(path).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     staging = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
