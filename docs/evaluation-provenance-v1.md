@@ -44,10 +44,11 @@ Illustrative structure, not an actual quality measurement:
   `data/benchmarks/<dataset_id>.json`.
 - `test_item_ids` must cover **exactly** every `test-recorded` item in
   that manifest. This first contract is for a *complete* recorded holdout.
-- Every `references[]` entry maps the served voice's stable
-  `reference_id` to a frozen **reference-pool item ID**. That item must
-  not be in the held-out test split. This preserves a traceable mapping
-  from serving selection to original WAV hash without exposing local paths.
+- The **single** `references[]` entry maps the served voice's stable
+  `reference_id` to one frozen **reference-pool item ID**. That item must
+  not be in the held-out test split. Because `generation_revision` binds
+  one reference selection, v1.1 rejects multiple reference entries for a
+  single evaluation record; use separate evaluation IDs for distinct prompts.
 - The explicit `decision` is still a **human/authorized evaluator's
   decision**, not an automatic quality claim. `promotable` must be a JSON
   boolean. `pending` and `rejected` are nonpromotable.
@@ -60,7 +61,12 @@ a new `evaluation_id` for an intentional new evaluation.
 
 A model can be promoted only if:
 
-1. Model Registry status is `validated` or an existing `default`.
+1. Model Registry status is `validated` or an existing `default`,
+   the model is physically present and not quarantined, and promotion
+   revalidates its current immutable manifest **and every artifact SHA-256**.
+   This asset integrity check still runs with the explicit internal
+   `require_evaluation=False` override. A caller using a nondefault
+   Model Root must pass `model_root` explicitly.
 2. The record uses schema v1.1 and has a validated/promotable decision.
 3. `model_revision` equals the **currently registered** model revision.
 4. The private frozen dataset manifest exists and its canonical fingerprint
@@ -87,3 +93,26 @@ This gate establishes **declared provenance consistency**. It does not:
 Do not call this a full benchmark runner or a verified quality promotion.
 A future benchmark executor should capture output hashes, measured metrics,
 human review evidence and precise `generation_revision` per run.
+
+## Registry reliability and identity collisions
+
+Model Root scan now rejects **all copies of an ambiguous model ID**, even
+if their manifest bytes are identical in different directories. Existing
+entries with a duplicated ID become quarantined and non-present. A stale
+`defaults` mapping is preserved for operator inspection, but
+`default_model_id` and discovery do not advertise it as an active default.
+A path that resolves outside Model Root, including a `model.json` symlink,
+is reported as an invalid scan item instead of terminating the scan.
+
+Registry snapshots are written through uniquely named staging files and
+fsynced before atomic replacement. This protects readers from truncated
+JSON on interrupted writes; it is **not** a multi-writer transaction. Callers
+must serialize simultaneous registry mutations, and operators must still
+verify power-loss recovery and storage durability on their host filesystem.
+
+### Limitations
+
+The integrity recheck occurs immediately **before promotion**; it does not
+lock weight files against later modification. Runtime-serving integrity
+continues to depend on Model Root and the serving resolver, and real Windows
+filesystem failure injection remains outside local unit coverage.
