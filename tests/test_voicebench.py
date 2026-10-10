@@ -235,3 +235,86 @@ def test_truncated_pcm_payload_does_not_count_as_a_valid_output():
     data = wav(1)
     with pytest.raises(ValueError, match="truncated"):
         voicebench._assert_wav(data[:-200])
+
+
+def test_resume_recovers_staged_wav_after_publish_crash(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    manifest = corpus(tmp_path, monkeypatch)
+    original_rename = Path.rename
+    crashed = {"done": False}
+
+    def interrupted_publish(self, target):
+        if self.name.endswith(".wav.part") and not crashed["done"]:
+            crashed["done"] = True
+            raise OSError("simulated interruption before publishing WAV")
+        return original_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", interrupted_publish)
+    first, _ = api()
+    with first, pytest.raises(RuntimeError, match="test-one"):
+        voicebench.run_voicebench(**run_kwargs(tmp_path, manifest, first))
+    recorded = json.loads((tmp_path / "run" / "run.json").read_text())
+    assert recorded["items"]["test-one"]["status"] == "prepared"
+    assert (tmp_path / "run" / "audio" / "test-one.wav.part").is_file()
+
+    monkeypatch.setattr(Path, "rename", original_rename)
+    second, stats = api()
+    with second:
+        finished = voicebench.run_voicebench(**run_kwargs(tmp_path, manifest, second, resume=True))
+    assert finished["status"] == "complete"
+    assert stats["synth"] == 1
+    assert not (tmp_path / "run" / "audio" / "test-one.wav.part").exists()
+
+
+def test_resume_recovers_published_wav_after_final_checkpoint_crash(tmp_path, monkeypatch):
+    manifest = corpus(tmp_path, monkeypatch)
+    actual_durable = voicebench._durable_json
+    crashed = {"done": False}
+
+    def interrupted_checkpoint(path, record):
+        if (not crashed["done"] and record.get("items", {}).get("test-one", {}).get("status") == "ok"):
+            crashed["done"] = True
+            raise OSError("simulated interruption after WAV publication")
+        return actual_durable(path, record)
+
+    monkeypatch.setattr(voicebench, "_durable_json", interrupted_checkpoint)
+    first, _ = api()
+    with first, pytest.raises(RuntimeError, match="test-one"):
+        voicebench.run_voicebench(**run_kwargs(tmp_path, manifest, first))
+    journal = json.loads((tmp_path / "run" / "run.json").read_text())
+    assert journal["items"]["test-one"]["status"] == "prepared"
+    published = tmp_path / "run" / "audio" / "test-one.wav"
+    assert published.is_file()
+    digest = hashlib.sha256(published.read_bytes()).hexdigest()
+
+    monkeypatch.setattr(voicebench, "_durable_json", actual_durable)
+    second, stats = api()
+    with second:
+        finished = voicebench.run_voicebench(**run_kwargs(tmp_path, manifest, second, resume=True))
+    assert finished["status"] == "complete"
+    assert finished["items"]["test-one"]["output_sha256"] == digest
+    assert stats["synth"] == 1
+
+
+def test_resume_rejects_mutated_prepared_audio(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    manifest = corpus(tmp_path, monkeypatch)
+    original_rename = Path.rename
+
+    def fail_publish(self, target):
+        if self.name.endswith(".wav.part"):
+            raise OSError("simulated interruption")
+        return original_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", fail_publish)
+    first, _ = api()
+    with first, pytest.raises(RuntimeError):
+        voicebench.run_voicebench(**run_kwargs(tmp_path, manifest, first))
+    pending_audio = tmp_path / "run" / "audio" / "test-one.wav.part"
+    pending_audio.write_bytes(b"tampered")
+    monkeypatch.setattr(Path, "rename", original_rename)
+    second, _ = api()
+    with second, pytest.raises(ValueError, match="mutated"):
+        voicebench.run_voicebench(**run_kwargs(tmp_path, manifest, second, resume=True))

@@ -55,3 +55,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 语音生成路径实测（voicebench v1）
 
 使用 [voicebench v1](docs/voicebench-v1.md) 对冻结数据集的完整 Test-recorded 集合逐条生成 WAV，固定角色/模型/参考身份，记录响应来源、输出哈希与 RTF，并支持中断恢复。需要本机 CVS 和真实引擎；成功生成不代表已通过声音质量评测，也不会自动允许模型晋升。
+
+## 可复核的跨引擎运行对照
+
+通过 [voicebench A/B audit v1](docs/voicebench-comparison-v1.md)，在重新校验冻结数据集和两次运行的输出 WAV 后，生成一份仅包含描述性生成性能与身份信息的对照报告。该报告不推断音质优劣，也不自动推动模型晋升。

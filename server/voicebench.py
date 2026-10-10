@@ -148,14 +148,39 @@ def _validate_resume(saved: dict, settings: dict, samples: list[dict], output_di
         record = records[name]
         if not isinstance(record, dict):
             raise ValueError(f"invalid checkpoint item: {name}")
-        out = output_dir / "audio" / f"{name}.wav"
-        if record.get("status") == "ok":
-            if not out.is_file() or hashlib.sha256(out.read_bytes()).hexdigest() != record.get("output_sha256"):
-                raise ValueError(f"completed audio artifact missing or mutated: {name}")
-            _assert_wav(out.read_bytes())
-        elif out.exists():
-            raise ValueError(f"untracked audio file would be overwritten: {name}")
+        target = output_dir / "audio" / f"{name}.wav"
+        staged = output_dir / "audio" / f"{name}.wav.part"
+        status = record.get("status")
+        if status in {"ok", "prepared"}:
+            if status == "ok" and staged.exists():
+                raise ValueError(f"unexpected staged audio for completed item: {name}")
+            if status == "prepared" and target.exists() == staged.exists():
+                raise ValueError(f"prepared audio has zero or multiple artifacts: {name}")
+            candidate = target if target.exists() else staged
+            if (not candidate.is_file() or candidate.is_symlink()
+                    or hashlib.sha256(candidate.read_bytes()).hexdigest() != record.get("output_sha256")):
+                raise ValueError(f"completed or prepared audio artifact missing or mutated: {name}")
+            _assert_wav(candidate.read_bytes())
+        elif status in {"pending", "failed"}:
+            if target.exists() or staged.exists():
+                raise ValueError(f"untracked audio file would be overwritten: {name}")
+        else:
+            raise ValueError(f"unknown checkpoint status for item: {name}")
 
+
+def _recover_prepared(saved: dict, checkpoint: Path, output_dir: Path) -> None:
+    """Finish a recorded WAV publish only after live source/serving revalidation."""
+    for name, record in saved["items"].items():
+        if record["status"] != "prepared":
+            continue
+        target = output_dir / "audio" / f"{name}.wav"
+        staged = output_dir / "audio" / f"{name}.wav.part"
+        if staged.exists():
+            if target.exists():
+                raise ValueError(f"two conflicting audio artifacts for: {name}")
+            staged.rename(target)
+        record["status"] = "ok"
+        _durable_json(checkpoint, saved)
 
 def run_voicebench(
     *, manifest_path: Path, audio_root: Path, output_dir: Path,
@@ -240,6 +265,8 @@ def run_voicebench(
         if saved["status"] == "complete":
             return saved
 
+        if resume:
+            _recover_prepared(saved, checkpoint, output_dir)
         saved["status"] = "running"
         _durable_json(checkpoint, saved)
         for item in samples:
@@ -259,12 +286,15 @@ def run_voicebench(
                 request_id = _check_headers(response, initial)
                 metrics = _assert_wav(response.content)
                 target = output_dir / "audio" / f"{item_id}.wav"
-                with target.open("xb") as stream:
+                staged = output_dir / "audio" / f"{item_id}.wav.part"
+                # Two-phase publication: checkpoint the expected output hash
+                # before renaming the durable staged WAV to its final name.
+                with staged.open("xb") as stream:
                     stream.write(response.content)
                     stream.flush()
                     os.fsync(stream.fileno())
                 saved["items"][item_id] = {
-                    "status": "ok", "request_id": request_id,
+                    "status": "prepared", "request_id": request_id,
                     "output_sha256": hashlib.sha256(response.content).hexdigest(),
                     "output_bytes": len(response.content),
                     "elapsed_seconds": round(elapsed, 6),
@@ -272,8 +302,20 @@ def run_voicebench(
                     **metrics,
                 }
                 _durable_json(checkpoint, saved)
+                if target.exists():
+                    raise ValueError(f"audio destination already exists: {item_id}")
+                staged.rename(target)
+                saved["items"][item_id]["status"] = "ok"
+                _durable_json(checkpoint, saved)
             except (httpx.HTTPError, OSError, ValueError, json.JSONDecodeError) as exc:
-                saved["items"][item_id] = {"status": "failed", "error": type(exc).__name__}
+                recorded_status = saved["items"][item_id].get("status")
+                if recorded_status == "ok":
+                    # The final file may already have been published; keep
+                    # its journaled digest so --resume can finish without
+                    # overwriting or regenerating the output.
+                    saved["items"][item_id]["status"] = "prepared"
+                elif recorded_status != "prepared":
+                    saved["items"][item_id] = {"status": "failed", "error": type(exc).__name__}
                 saved["status"] = "partial"
                 _durable_json(checkpoint, saved)
                 raise RuntimeError(f"voicebench stopped at {item_id}: {type(exc).__name__}") from exc
