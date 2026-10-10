@@ -77,5 +77,6 @@ GPT-SoVITS, IndexTTS or ASR; it does not compute WER, speaker similarity, RTF,
 TTFA, MOS or prove that a model is promotable. It also does not create the
 separate 60-sentence unseen-text set or 20-paragraph long-form set. Those should
 be frozen as subsequent suites with their own identities before introducing an
-engine-neutral voicebench runner. A later evaluation record should bind to
-`dataset_sha256`, model revision and the selected reference IDs.
+engine-neutral voicebench runner. Evaluation records now bind to the `dataset_sha256`, immutable model
+revision, full held-out `test_item_ids`, and selected reference IDs/item IDs.
+See [Evaluation Provenance v1.1](evaluation-provenance-v1.md).
