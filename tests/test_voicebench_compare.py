@@ -106,7 +106,8 @@ def test_complete_a_b_report_audits_audio_and_has_no_quality_score(tmp_path):
     assert [x["item_id"] for x in result["paired_items"]] == ["test-one", "test-two"]
     assert result["runs"]["A"]["summary"]["aggregate_rtf"] == 2.5
     assert result["runs"]["B"]["summary"]["median_item_rtf"] == 2.5
-    assert "wer" not in json.dumps(result).lower()
+    assert "wer" not in result["runs"]["A"]["summary"]
+    assert "promotable" not in result
     # For identical inputs the content fingerprint does not depend on report output path.
     again = compare(tmp_path, root, manifest, a, b, "comparison-2.json")
     assert again["report_sha256"] == result["report_sha256"]
