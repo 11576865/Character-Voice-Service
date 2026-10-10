@@ -44,10 +44,10 @@ Illustrative structure, not an actual quality measurement:
   `data/benchmarks/<dataset_id>.json`.
 - `test_item_ids` must cover **exactly** every `test-recorded` item in
   that manifest. This first contract is for a *complete* recorded holdout.
-- Every `references[]` entry maps the served voice's stable
+- The single `references[]` entry maps the served voice's stable
   `reference_id` to a frozen **reference-pool item ID**. That item must
   not be in the held-out test split. This preserves a traceable mapping
-  from serving selection to original WAV hash without exposing local paths.
+  from serving selection to original WAV hash without exposing local paths.\n  Version 1.1 deliberately requires **exactly one speaker reference per record**\n  because the opaque `generation_revision` includes that reference identity.\n  Use separate evaluations for different reference selections.
 - The explicit `decision` is still a **human/authorized evaluator's
   decision**, not an automatic quality claim. `promotable` must be a JSON
   boolean. `pending` and `rejected` are nonpromotable.
