@@ -92,7 +92,7 @@ def _registry_write_lock(path: Path, *, timeout: float = 120.0):
     """
     if timeout < 0:
         raise ValueError("registry lock timeout must not be negative")
-    path = Path(path).expanduser().absolute()
+    path = Path(path).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
     # Open before attempting a lock; close releases the OS lock even if an
@@ -275,55 +275,57 @@ def scan_model_root(
     model_root: Path = MODEL_ROOT,
     registry_path: Path = REGISTRY_PATH,
 ) -> dict:
-    model_root = model_root.expanduser().resolve()
-    model_root.mkdir(parents=True, exist_ok=True)
-
-    discovered: dict[str, dict] = {}
-    duplicate_ids: set[str] = set()
-    invalid: list[dict] = []
-
-    for manifest_path in sorted(model_root.rglob(MANIFEST_FILENAME)):
-        try:
-            # Resolve provenance path inside the guarded block: a model.json
-            # symlink can point outside Model Root even when rglob found it
-            # inside. It must be reported invalid, not abort the entire scan.
-            relative_manifest = _registry_relative(manifest_path, model_root)
-            model = validate_manifest(manifest_path)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            invalid.append({"manifest": str(manifest_path), "error": str(exc)})
-            continue
-
-        model_id = model["model_id"]
-        if model_id in duplicate_ids:
-            invalid.append({
-                "manifest": relative_manifest,
-                "error": f"duplicate model_id: {model_id}",
-            })
-            continue
-
-        if model_id in discovered:
-            # Two copies of an identical manifest are still ambiguous:
-            # changing scan order must not change the Model Root locator.
-            duplicate_ids.add(model_id)
-            discovered.pop(model_id)
-            invalid.append({
-                "manifest": relative_manifest,
-                "error": f"duplicate model_id across directories: {model_id}",
-            })
-            continue
-
-        discovered[model_id] = {
-            "scope": model["scope"],
-            "voice_id": model["voice_id"],
-            "engine": model["engine"]["name"],
-            "engine_version": model["engine"]["engine_version"],
-            "manifest": relative_manifest,
-            "manifest_sha256": model["manifest_sha256"],
-            "revision": model["revision"],
-            "initial_status": model["initial_status"],
-        }
-
+    # Include discovery itself in the same transaction: concurrent scans
+    # must not publish stale inventories in reverse scan-completion order.
     with _registry_write_lock(registry_path):
+        model_root = model_root.expanduser().resolve()
+        model_root.mkdir(parents=True, exist_ok=True)
+
+        discovered: dict[str, dict] = {}
+        duplicate_ids: set[str] = set()
+        invalid: list[dict] = []
+
+        for manifest_path in sorted(model_root.rglob(MANIFEST_FILENAME)):
+            try:
+                # Resolve provenance path inside the guarded block: a model.json
+                # symlink can point outside Model Root even when rglob found it
+                # inside. It must be reported invalid, not abort the entire scan.
+                relative_manifest = _registry_relative(manifest_path, model_root)
+                model = validate_manifest(manifest_path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                invalid.append({"manifest": str(manifest_path), "error": str(exc)})
+                continue
+
+            model_id = model["model_id"]
+            if model_id in duplicate_ids:
+                invalid.append({
+                    "manifest": relative_manifest,
+                    "error": f"duplicate model_id: {model_id}",
+                })
+                continue
+
+            if model_id in discovered:
+                # Two copies of an identical manifest are still ambiguous:
+                # changing scan order must not change the Model Root locator.
+                duplicate_ids.add(model_id)
+                discovered.pop(model_id)
+                invalid.append({
+                    "manifest": relative_manifest,
+                    "error": f"duplicate model_id across directories: {model_id}",
+                })
+                continue
+
+            discovered[model_id] = {
+                "scope": model["scope"],
+                "voice_id": model["voice_id"],
+                "engine": model["engine"]["name"],
+                "engine_version": model["engine"]["engine_version"],
+                "manifest": relative_manifest,
+                "manifest_sha256": model["manifest_sha256"],
+                "revision": model["revision"],
+                "initial_status": model["initial_status"],
+            }
+
         registry = load_registry(registry_path)
         now = _now_iso()
         for model_id, item in discovered.items():
@@ -380,12 +382,12 @@ def scan_model_root(
                 entry["updated_at"] = now
 
         _save_registry_unlocked(registry, registry_path)
-    return {
-        "model_root": str(model_root),
-        "discovered": len(discovered),
-        "invalid": invalid,
-        "model_ids": sorted(discovered),
-    }
+        return {
+            "model_root": str(model_root),
+            "discovered": len(discovered),
+            "invalid": invalid,
+            "model_ids": sorted(discovered),
+        }
 
 
 def _entry(model_id: str, registry_path: Path = REGISTRY_PATH) -> tuple[dict, dict]:
