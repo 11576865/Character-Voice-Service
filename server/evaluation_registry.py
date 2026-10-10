@@ -60,8 +60,10 @@ def _validate_record(record: dict) -> None:
         raise ValueError("test_item_ids must contain unique stable IDs")
 
     references = dataset.get("references")
-    if not isinstance(references, list) or not references:
-        raise ValueError("references must contain at least one bound voice reference")
+    # CVS generation_revision is reference-specific. The v1.1 evaluation
+    # has one revision, so it must declare exactly one voice reference.
+    if not isinstance(references, list) or len(references) != 1:
+        raise ValueError("v1.1 evaluation requires exactly one bound voice reference")
     ref_ids = set()
     for ref in references:
         if not isinstance(ref, dict):
