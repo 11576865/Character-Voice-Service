@@ -590,3 +590,50 @@ def test_existing_manifest_is_never_overwritten_by_import(tmp_path):
     with pytest.raises(ValueError, match="different manifest"):
         _import_pair(tmp_path, gpt, sovits, name="Different Display Name")
     assert manifest.read_bytes() == first_bytes
+
+
+def test_import_can_resume_after_second_weight_publish_failure(tmp_path, monkeypatch):
+    gpt, sovits = _import_sources(tmp_path)
+    original = model_registry.os.link
+    fired = {"once": False}
+
+    def fail_second_weight_once(source, destination, *args, **kwargs):
+        if str(destination).endswith("sovits.pth") and not fired["once"]:
+            fired["once"] = True
+            raise OSError("interrupted before second artifact publish")
+        return original(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(model_registry.os, "link", fail_second_weight_once)
+    with pytest.raises(OSError, match="second artifact"):
+        _import_pair(tmp_path, gpt, sovits)
+    root = tmp_path / "models"
+    published = list(root.rglob("gpt.ckpt"))
+    assert len(published) == 1
+    original_hash = model_registry.sha256_file(published[0])
+    assert list(root.rglob("sovits.pth")) == []
+    assert list(root.rglob("model.json")) == []
+    assert list(root.rglob("*.tmp")) == []
+
+    monkeypatch.setattr(model_registry.os, "link", original)
+    model_id = _import_pair(tmp_path, gpt, sovits)
+    assert model_registry.sha256_file(published[0]) == original_hash
+    assert model_registry.resolve_model(
+        model_id, model_root=root, registry_path=tmp_path / "model-registry.json"
+    )["model_id"] == model_id
+
+
+def test_import_rejects_symlinked_manifest_even_if_contents_are_identical(tmp_path):
+    gpt, sovits = _import_sources(tmp_path)
+    model_id = _import_pair(tmp_path, gpt, sovits)
+    model_dir = tmp_path / "models" / "march-7th" / "gpt-sovits" / model_id
+    manifest = model_dir / "model.json"
+    reference = tmp_path / "outside-manifest.json"
+    reference.write_bytes(manifest.read_bytes())
+    manifest.unlink()
+    try:
+        manifest.symlink_to(reference)
+    except (OSError, NotImplementedError):
+        pytest.skip("manifest symlinks unavailable")
+    with pytest.raises(ValueError, match="symlink"):
+        _import_pair(tmp_path, gpt, sovits)
+    assert reference.is_file()
