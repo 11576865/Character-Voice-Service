@@ -1,9 +1,12 @@
+import errno
 import hashlib
 import json
 import os
 import re
 import shutil
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -79,25 +82,78 @@ def load_registry(path: Path = REGISTRY_PATH) -> dict:
     return data
 
 
-def save_registry(data: dict, path: Path = REGISTRY_PATH) -> None:
-    """Atomically publish one complete registry snapshot.
+@contextmanager
+def _registry_write_lock(path: Path, *, timeout: float = 120.0):
+    """Advisory cross-process lock for the full registry read-modify-write.
 
-    Independent calls must still be serialized by their owner: atomic
-    replacement protects readers against partial JSON, not lost updates
-    from simultaneous writers.
+    Never delete the .lock file: unlinking/recreating the inode would allow
+    concurrent holders to believe they have mutually exclusive locks.
+    Linux/macOS use flock; Windows uses msvcrt byte-range locking.
     """
+    if timeout < 0:
+        raise ValueError("registry lock timeout must not be negative")
+    path = Path(path).expanduser().absolute()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(path.name + ".lock")
+    # Open before attempting a lock; close releases the OS lock even if an
+    # exception occurs. Never use an existence-test lockfile protocol.
+    with lock_path.open("a+b") as lock_file:
+        if os.name == "nt":
+            import msvcrt
+
+            lock_file.seek(0, 2)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            lock = lambda: msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            unlock = lambda: msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            lock = lambda: fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            unlock = lambda: fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                lock()
+                break
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"timed out waiting for Model Registry lock: {lock_path}") from exc
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        try:
+            yield
+        finally:
+            unlock()
+
+
+def _save_registry_unlocked(data: dict, path: Path) -> None:
+    """Only call inside _registry_write_lock (or from save_registry)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     staging = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
-        with staging.open("x", encoding="utf-8", newline="\n") as stream:
+        with staging.open("x", encoding="utf-8", newline="\\n") as stream:
             json.dump(data, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
+            stream.write("\\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(staging, path)
     finally:
         staging.unlink(missing_ok=True)
 
+
+def save_registry(data: dict, path: Path = REGISTRY_PATH) -> None:
+    """Publish a complete registry snapshot under the same writer lock.
+
+    Do not use this API for stale read-modify-write snapshots; callers which
+    mutate registry state must hold one lock from load through publication.
+    """
+    with _registry_write_lock(path):
+        _save_registry_unlocked(data, path)
 
 def _relative_artifact_path(value: object, field: str) -> Path:
     raw = str(value or "").strip()
@@ -220,7 +276,6 @@ def scan_model_root(
 ) -> dict:
     model_root = model_root.expanduser().resolve()
     model_root.mkdir(parents=True, exist_ok=True)
-    registry = load_registry(registry_path)
 
     discovered: dict[str, dict] = {}
     duplicate_ids: set[str] = set()
@@ -267,61 +322,63 @@ def scan_model_root(
             "initial_status": model["initial_status"],
         }
 
-    now = _now_iso()
-    for model_id, item in discovered.items():
-        existing = registry["models"].get(model_id)
-        if existing and existing.get("manifest_sha256") not in {None, item["manifest_sha256"]}:
-            existing["status"] = "quarantined"
-            existing["present"] = True
-            existing["updated_at"] = now
-            existing["integrity_error"] = "immutable manifest changed after registration"
-            invalid.append({
+    with _registry_write_lock(registry_path):
+        registry = load_registry(registry_path)
+        now = _now_iso()
+        for model_id, item in discovered.items():
+            existing = registry["models"].get(model_id)
+            if existing and existing.get("manifest_sha256") not in {None, item["manifest_sha256"]}:
+                existing["status"] = "quarantined"
+                existing["present"] = True
+                existing["updated_at"] = now
+                existing["integrity_error"] = "immutable manifest changed after registration"
+                invalid.append({
+                    "manifest": item["manifest"],
+                    "error": f"immutable manifest changed after registration: {model_id}",
+                })
+                continue
+
+            if existing:
+                status = existing.get("status", item["initial_status"])
+                if status not in LIFECYCLE_STATES:
+                    status = "candidate"
+                first_seen = existing.get("discovered_at") or now
+            else:
+                status = item["initial_status"]
+                first_seen = now
+
+            registry["models"][model_id] = {
+                "scope": item["scope"],
+                "voice_id": item["voice_id"],
+                "engine": item["engine"],
+                "engine_version": item["engine_version"],
                 "manifest": item["manifest"],
-                "error": f"immutable manifest changed after registration: {model_id}",
-            })
-            continue
+                "manifest_sha256": item["manifest_sha256"],
+                "revision": item["revision"],
+                "status": status,
+                "present": True,
+                "discovered_at": first_seen,
+                "updated_at": now,
+            }
 
-        if existing:
-            status = existing.get("status", item["initial_status"])
-            if status not in LIFECYCLE_STATES:
-                status = "candidate"
-            first_seen = existing.get("discovered_at") or now
-        else:
-            status = item["initial_status"]
-            first_seen = now
+        # Conflicting physical identities cannot safely retain any previous
+        # default/validated status. Existing entries stay inspectable but cannot
+        # be resolved or promoted while the collision remains.
+        for model_id in duplicate_ids:
+            existing = registry["models"].get(model_id)
+            if isinstance(existing, dict):
+                existing["status"] = "quarantined"
+                existing["present"] = False
+                existing["updated_at"] = now
+                existing["integrity_error"] = "duplicate model_id in Model Root"
 
-        registry["models"][model_id] = {
-            "scope": item["scope"],
-            "voice_id": item["voice_id"],
-            "engine": item["engine"],
-            "engine_version": item["engine_version"],
-            "manifest": item["manifest"],
-            "manifest_sha256": item["manifest_sha256"],
-            "revision": item["revision"],
-            "status": status,
-            "present": True,
-            "discovered_at": first_seen,
-            "updated_at": now,
-        }
+        discovered_ids = set(discovered)
+        for model_id, entry in registry["models"].items():
+            if model_id not in discovered_ids:
+                entry["present"] = False
+                entry["updated_at"] = now
 
-    # Conflicting physical identities cannot safely retain any previous
-    # default/validated status. Existing entries stay inspectable but cannot
-    # be resolved or promoted while the collision remains.
-    for model_id in duplicate_ids:
-        existing = registry["models"].get(model_id)
-        if isinstance(existing, dict):
-            existing["status"] = "quarantined"
-            existing["present"] = False
-            existing["updated_at"] = now
-            existing["integrity_error"] = "duplicate model_id in Model Root"
-
-    discovered_ids = set(discovered)
-    for model_id, entry in registry["models"].items():
-        if model_id not in discovered_ids:
-            entry["present"] = False
-            entry["updated_at"] = now
-
-    save_registry(registry, registry_path)
+        _save_registry_unlocked(registry, registry_path)
     return {
         "model_root": str(model_root),
         "discovered": len(discovered),
@@ -434,10 +491,11 @@ def set_status(
     status = str(status).strip()
     if status not in LIFECYCLE_STATES:
         raise ValueError(f"invalid lifecycle status: {status}")
-    registry, entry = _entry(model_id, registry_path)
-    entry["status"] = status
-    entry["updated_at"] = _now_iso()
-    save_registry(registry, registry_path)
+    with _registry_write_lock(registry_path):
+        registry, entry = _entry(model_id, registry_path)
+        entry["status"] = status
+        entry["updated_at"] = _now_iso()
+        _save_registry_unlocked(registry, registry_path)
 
 
 def promote_model(
@@ -451,56 +509,58 @@ def promote_model(
 ) -> None:
     from server.evaluation_registry import model_is_promotable
 
-    registry, entry = _entry(model_id, registry_path)
-    if entry.get("scope", "voice-bound") == "shared":
-        raise ValueError("shared models cannot be promoted as a per-voice default")
-    if entry.get("status") not in {"validated", "default"}:
-        raise ValueError("only a validated model can be promoted")
-    if entry.get("present") is not True:
-        raise ValueError("model is not present in Model Root; cannot promote")
-    if entry.get("integrity_error"):
-        raise ValueError("quarantined model integrity error; cannot promote")
+    with _registry_write_lock(registry_path):
+        registry, entry = _entry(model_id, registry_path)
+        if entry.get("scope", "voice-bound") == "shared":
+            raise ValueError("shared models cannot be promoted as a per-voice default")
+        if entry.get("status") not in {"validated", "default"}:
+            raise ValueError("only a validated model can be promoted")
+        if entry.get("present") is not True:
+            raise ValueError("model is not present in Model Root; cannot promote")
+        if entry.get("integrity_error"):
+            raise ValueError("quarantined model integrity error; cannot promote")
 
-    # The persisted registry and evaluation are only claims. Re-hash the
-    # currently installed immutable manifest and ALL recorded artifact bytes
-    # before creating or changing a serving default, even with an explicit
-    # require_evaluation=False administrative override.
-    resolved = resolve_model(model_id, model_root=model_root, registry_path=registry_path)
-    if (resolved.get("revision") != entry.get("revision")
-            or resolved.get("scope") != entry.get("scope", "voice-bound")
-            or resolved.get("voice_id") != entry.get("voice_id")):
-        raise ValueError("model identity changed since registry scan; cannot promote")
-    if require_evaluation:
-        evaluation_options = {"model_revision": entry.get("revision")}
-        if evaluation_dir is not None:
-            evaluation_options["directory"] = evaluation_dir
-        if benchmark_dir is not None:
-            evaluation_options["benchmark_dir"] = benchmark_dir
-        if not model_is_promotable(model_id, **evaluation_options):
-            raise ValueError("model has no provenance-matched promotable validated evaluation")
+        # The persisted registry and evaluation are only claims. Re-hash the
+        # currently installed immutable manifest and ALL recorded artifact bytes
+        # before creating or changing a serving default, even with an explicit
+        # require_evaluation=False administrative override.
+        resolved = resolve_model(model_id, model_root=model_root, registry_path=registry_path)
+        if (resolved.get("revision") != entry.get("revision")
+                or resolved.get("scope") != entry.get("scope", "voice-bound")
+                or resolved.get("voice_id") != entry.get("voice_id")):
+            raise ValueError("model identity changed since registry scan; cannot promote")
+        if require_evaluation:
+            evaluation_options = {"model_revision": entry.get("revision")}
+            if evaluation_dir is not None:
+                evaluation_options["directory"] = evaluation_dir
+            if benchmark_dir is not None:
+                evaluation_options["benchmark_dir"] = benchmark_dir
+            if not model_is_promotable(model_id, **evaluation_options):
+                raise ValueError("model has no provenance-matched promotable validated evaluation")
 
-    voice_id = _require_id(entry.get("voice_id"), "voice_id")
-    previous_id = registry.get("defaults", {}).get(voice_id)
-    if previous_id and previous_id != model_id:
-        previous = registry["models"].get(previous_id)
-        if isinstance(previous, dict) and previous.get("status") == "default":
-            previous["status"] = "validated"
-            previous["updated_at"] = _now_iso()
+        voice_id = _require_id(entry.get("voice_id"), "voice_id")
+        previous_id = registry.get("defaults", {}).get(voice_id)
+        if previous_id and previous_id != model_id:
+            previous = registry["models"].get(previous_id)
+            if isinstance(previous, dict) and previous.get("status") == "default":
+                previous["status"] = "validated"
+                previous["updated_at"] = _now_iso()
 
-    entry["status"] = "default"
-    entry["updated_at"] = _now_iso()
-    registry.setdefault("defaults", {})[voice_id] = model_id
-    save_registry(registry, registry_path)
+        entry["status"] = "default"
+        entry["updated_at"] = _now_iso()
+        registry.setdefault("defaults", {})[voice_id] = model_id
+        _save_registry_unlocked(registry, registry_path)
 
 
 def retire_model(model_id: str, *, registry_path: Path = REGISTRY_PATH) -> None:
-    registry, entry = _entry(model_id, registry_path)
-    voice_id = entry.get("voice_id")
-    if voice_id and registry.get("defaults", {}).get(voice_id) == model_id:
-        raise ValueError("cannot retire the current default model before promoting another model")
-    entry["status"] = "retired"
-    entry["updated_at"] = _now_iso()
-    save_registry(registry, registry_path)
+    with _registry_write_lock(registry_path):
+        registry, entry = _entry(model_id, registry_path)
+        voice_id = entry.get("voice_id")
+        if voice_id and registry.get("defaults", {}).get(voice_id) == model_id:
+            raise ValueError("cannot retire the current default model before promoting another model")
+        entry["status"] = "retired"
+        entry["updated_at"] = _now_iso()
+        _save_registry_unlocked(registry, registry_path)
 
 
 def _legacy_search_roots() -> list[Path]:
