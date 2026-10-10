@@ -123,7 +123,7 @@ def _registry_write_lock(path: Path, *, timeout: float = 120.0):
                 lock()
                 break
             except OSError as exc:
-                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, getattr(errno, "EDEADLK", errno.EAGAIN)}:
                     raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f"timed out waiting for Model Registry lock: {lock_path}") from exc
