@@ -489,26 +489,17 @@ def _import_pair(tmp_path, gpt, sovits, **overrides):
     return model_registry.import_gpt_sovits_model(**params)
 
 
-def test_very_long_model_id_keeps_the_weight_fingerprint_suffix(tmp_path):
-    gpt, sovits = _import_sources(tmp_path)
+def test_very_long_model_id_keeps_the_weight_fingerprint_suffix():
+    # The file system must not need Windows long-path support just to test
+    # the identifier algorithm.
     long_voice = "v" * 115
     long_source = "s" * 115
-    first = _import_pair(
-        tmp_path, gpt, sovits, voice_id=long_voice, source_model_id=long_source,
-    )
-    assert len(first) <= 127
-    assert first.endswith("-" + hashlib.sha256((
-        hashlib.sha256(gpt.read_bytes()).hexdigest()
-        + ":" + hashlib.sha256(sovits.read_bytes()).hexdigest()
-    ).encode("ascii")).hexdigest()[:12])
-
-    # Changing a weight must change the global model ID even if the
-    # descriptive prefix is long enough to consume the entire ID budget.
-    gpt.write_bytes(b"trained gpt revision two")
-    second = _import_pair(
-        tmp_path, gpt, sovits, voice_id=long_voice, source_model_id=long_source,
-    )
+    first = model_registry._import_model_id(long_voice, long_source, "v4", "a" * 12)
+    second = model_registry._import_model_id(long_voice, long_source, "v4", "b" * 12)
     assert first != second
+    assert first.endswith("-" + "a" * 12)
+    assert second.endswith("-" + "b" * 12)
+    assert len(first) <= 127
     assert len(second) <= 127
 
 
