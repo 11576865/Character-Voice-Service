@@ -575,10 +575,13 @@ def _assert_import_destination(destination: Path, model_root: Path) -> None:
     This is a preflight guard, not protection against a hostile concurrent
     process replacing filesystem components mid-write.
     """
-    root = model_root.expanduser().resolve()
+    # A configured Model Root may itself be a symlink/mounted alias.
+    # Normalize its lexical prefix before checking each *child* component.
+    lexical_root = Path(os.path.abspath(model_root.expanduser()))
+    root = lexical_root.resolve()
     lexical = Path(os.path.abspath(destination.expanduser()))
     try:
-        relative = lexical.relative_to(root)
+        relative = lexical.relative_to(lexical_root)
     except ValueError as exc:
         raise ValueError("model import destination escapes Model Root") from exc
     cursor = root
