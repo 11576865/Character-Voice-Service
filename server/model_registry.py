@@ -569,16 +569,88 @@ def locate_legacy_weight(path_value: str, expected_suffix: str) -> Path:
     return ranked[0]
 
 
-def _copy_immutable(source: Path, destination: Path, expected_hash: str) -> None:
+def _assert_import_destination(destination: Path, model_root: Path) -> None:
+    """Reject symlink-controlled paths within the configured Model Root.
+
+    This is a preflight guard, not protection against a hostile concurrent
+    process replacing filesystem components mid-write.
+    """
+    # A configured Model Root may itself be a symlink/mounted alias.
+    # Normalize its lexical prefix before checking each *child* component.
+    lexical_root = Path(os.path.abspath(model_root.expanduser()))
+    root = lexical_root.resolve()
+    lexical = Path(os.path.abspath(destination.expanduser()))
+    try:
+        relative = lexical.relative_to(lexical_root)
+    except ValueError as exc:
+        raise ValueError("model import destination escapes Model Root") from exc
+    cursor = root
+    for component in relative.parts:
+        cursor = cursor / component
+        if cursor.is_symlink():
+            raise ValueError(f"model import destination contains a symlink: {cursor}")
+    if not lexical.resolve().is_relative_to(root):
+        raise ValueError("model import destination escapes Model Root")
+
+
+def _copy_immutable(
+    source: Path, destination: Path, expected_hash: str, *, model_root: Path,
+) -> None:
+    """Stage, hash, then publish an immutable artifact without overwriting."""
+    _assert_import_destination(destination, model_root)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    _assert_import_destination(destination, model_root)
     if destination.exists():
-        if sha256_file(destination) != expected_hash:
+        if not destination.is_file() or sha256_file(destination) != expected_hash:
             raise ValueError(f"immutable artifact already exists with different content: {destination}")
         return
-    shutil.copy2(source, destination)
-    if sha256_file(destination) != expected_hash:
-        destination.unlink(missing_ok=True)
-        raise ValueError(f"artifact copy verification failed: {destination}")
+
+    staging = destination.with_name(destination.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        digest = hashlib.sha256()
+        with source.open("rb") as incoming, staging.open("xb") as outgoing:
+            while block := incoming.read(1024 * 1024):
+                outgoing.write(block)
+                digest.update(block)
+            outgoing.flush()
+            os.fsync(outgoing.fileno())
+        if digest.hexdigest() != expected_hash or sha256_file(staging) != expected_hash:
+            raise ValueError(f"source artifact changed during immutable copy: {source}")
+        _assert_import_destination(destination, model_root)
+        try:
+            # Hard-link publication is create-only on POSIX and Windows NTFS:
+            # unlike rename/replace it cannot overwrite an existing artifact.
+            os.link(staging, destination)
+        except FileExistsError:
+            if (not destination.is_file()
+                    or destination.is_symlink()
+                    or sha256_file(destination) != expected_hash):
+                raise ValueError(f"immutable artifact was concurrently replaced: {destination}")
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _import_model_id(voice_id: str, source_model_id: str, version: str, identity_hash: str) -> str:
+    """Preserve source-content identity when the descriptive prefix is long."""
+    if not re.fullmatch(r"[0-9a-f]{12}", identity_hash):
+        raise ValueError("model import fingerprint requires twelve lowercase hex digits")
+    prefix = _safe_component(f"{voice_id}-gpt-sovits-{version}-{source_model_id}")
+    # Reserve the entire suffix, including its separator, before truncation.
+    prefix = prefix[:127 - 1 - len(identity_hash)].rstrip(".-_") or "model"
+    model_id = f"{prefix}-{identity_hash}"
+    return _require_id(model_id, "model_id")
+
+
+def _equivalent_import_manifest(existing: dict, proposed: dict) -> bool:
+    """Only the creation timestamp may vary across an idempotent retry."""
+    if not isinstance(existing, dict):
+        return False
+    left, right = json.loads(json.dumps(existing)), json.loads(json.dumps(proposed))
+    for item in (left, right):
+        lifecycle = item.get("lifecycle")
+        if isinstance(lifecycle, dict):
+            lifecycle.pop("created_at", None)
+    return left == right
 
 
 def import_gpt_sovits_model(
@@ -606,10 +678,7 @@ def import_gpt_sovits_model(
     ).hexdigest()[:12]
 
     engine_version = str(version or "").strip() or "unknown"
-    model_id = _safe_component(
-        f"{voice_id}-gpt-sovits-{engine_version}-{source_model_id}-{identity_hash}"
-    )[:127]
-    _require_id(model_id, "model_id")
+    model_id = _import_model_id(voice_id, source_model_id, engine_version, identity_hash)
 
     model_dir = (
         model_root.expanduser()
@@ -621,8 +690,9 @@ def import_gpt_sovits_model(
     gpt_destination = artifacts_dir / "gpt.ckpt"
     sovits_destination = artifacts_dir / "sovits.pth"
 
-    _copy_immutable(gpt_source, gpt_destination, gpt_hash)
-    _copy_immutable(sovits_source, sovits_destination, sovits_hash)
+    _assert_import_destination(model_dir / MANIFEST_FILENAME, model_root)
+    _copy_immutable(gpt_source, gpt_destination, gpt_hash, model_root=model_root)
+    _copy_immutable(sovits_source, sovits_destination, sovits_hash, model_root=model_root)
 
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -656,18 +726,30 @@ def import_gpt_sovits_model(
 
     model_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = model_dir / MANIFEST_FILENAME
+    _assert_import_destination(manifest_path, model_root)
     if manifest_path.exists():
         existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if existing != manifest:
-            # created_at is intentionally not part of identity; preserve the first manifest
-            existing_artifacts = existing.get("artifacts") if isinstance(existing, dict) else None
-            if existing_artifacts != manifest["artifacts"] or existing.get("model_id") != model_id:
-                raise ValueError(f"immutable model directory already contains a different manifest: {model_dir}")
+        if not _equivalent_import_manifest(existing, manifest):
+            raise ValueError(f"immutable model directory already contains a different manifest: {model_dir}")
     else:
-        manifest_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        # No truncatable manifest on a partially successful write, and no
+        # overwrite of a concurrently created immutable manifest.
+        staged_manifest = manifest_path.with_name("model." + uuid.uuid4().hex + ".tmp")
+        try:
+            with staged_manifest.open("x", encoding="utf-8", newline="\n") as stream:
+                json.dump(manifest, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            _assert_import_destination(manifest_path, model_root)
+            try:
+                os.link(staged_manifest, manifest_path)
+            except FileExistsError:
+                existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if not _equivalent_import_manifest(existing, manifest):
+                    raise ValueError(f"concurrent immutable model manifest differs: {model_dir}")
+        finally:
+            staged_manifest.unlink(missing_ok=True)
 
     scan_model_root(model_root=model_root, registry_path=registry_path)
     return model_id

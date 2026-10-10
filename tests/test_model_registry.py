@@ -462,3 +462,178 @@ def test_quarantined_model_cannot_resolve_even_if_files_are_restored(tmp_path):
         model_registry.resolve_model(
             "march7-gsv-v4-a", model_root=model_root, registry_path=registry,
         )
+
+
+def _import_sources(tmp_path):
+    root = tmp_path / "sources"
+    root.mkdir(parents=True)
+    gpt = root / "gpt.ckpt"
+    sovits = root / "sovits.pth"
+    gpt.write_bytes(b"trained gpt revision one")
+    sovits.write_bytes(b"trained sovits revision one")
+    return gpt, sovits
+
+
+def _import_pair(tmp_path, gpt, sovits, **overrides):
+    params = {
+        "voice_id": "march-7th",
+        "source_model_id": "local-v4",
+        "name": "March English",
+        "version": "v4",
+        "gpt_weights": str(gpt),
+        "sovits_weights": str(sovits),
+        "model_root": tmp_path / "models",
+        "registry_path": tmp_path / "model-registry.json",
+    }
+    params.update(overrides)
+    return model_registry.import_gpt_sovits_model(**params)
+
+
+def test_very_long_model_id_keeps_the_weight_fingerprint_suffix():
+    # The file system must not need Windows long-path support just to test
+    # the identifier algorithm.
+    long_voice = "v" * 115
+    long_source = "s" * 115
+    first = model_registry._import_model_id(long_voice, long_source, "v4", "a" * 12)
+    second = model_registry._import_model_id(long_voice, long_source, "v4", "b" * 12)
+    assert first != second
+    assert first.endswith("-" + "a" * 12)
+    assert second.endswith("-" + "b" * 12)
+    assert len(first) <= 127
+    assert len(second) <= 127
+
+
+def test_import_retries_identically_but_rejects_changed_serving_configuration(tmp_path):
+    gpt, sovits = _import_sources(tmp_path)
+    model_id = _import_pair(tmp_path, gpt, sovits, parameters={"top_k": 15})
+    same = _import_pair(tmp_path, gpt, sovits, parameters={"top_k": 15})
+    assert same == model_id
+    with pytest.raises(ValueError, match="different manifest"):
+        _import_pair(tmp_path, gpt, sovits, parameters={"top_k": 99})
+
+
+def test_import_rejects_symlinked_artifact_target_even_with_matching_bytes(tmp_path):
+    gpt, sovits = _import_sources(tmp_path)
+    existing = _import_pair(tmp_path, gpt, sovits)
+    root = tmp_path / "models"
+    directory = root / "march-7th" / "gpt-sovits" / existing / "artifacts"
+    target = directory / "gpt.ckpt"
+    target.unlink()
+    try:
+        target.symlink_to(gpt)
+    except (OSError, NotImplementedError):
+        pytest.skip("artifact symlinks unavailable on this filesystem")
+    with pytest.raises(ValueError, match="symlink"):
+        _import_pair(tmp_path, gpt, sovits)
+
+
+def test_import_rejects_symlinked_model_directory(tmp_path):
+    gpt, sovits = _import_sources(tmp_path)
+    root = tmp_path / "models"
+    external = tmp_path / "other-models"
+    external.mkdir()
+    parent = root / "march-7th"
+    parent.mkdir(parents=True)
+    try:
+        (parent / "gpt-sovits").symlink_to(external, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("directory symlinks unavailable on this filesystem")
+    with pytest.raises(ValueError, match="symlink"):
+        _import_pair(tmp_path, gpt, sovits)
+    assert list(external.iterdir()) == []
+
+
+def test_failed_artifact_publication_cleans_staging_and_never_writes_manifest(tmp_path, monkeypatch):
+    gpt, sovits = _import_sources(tmp_path)
+    publish = model_registry.os.link
+
+    def fail_artifact_publish(source, destination, *args, **kwargs):
+        if str(destination).endswith("gpt.ckpt"):
+            raise OSError("injected hard-link publication failure")
+        return publish(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(model_registry.os, "link", fail_artifact_publish)
+    with pytest.raises(OSError, match="publication failure"):
+        _import_pair(tmp_path, gpt, sovits)
+    root = tmp_path / "models"
+    assert list(root.rglob("*.tmp")) == []
+    assert list(root.rglob("model.json")) == []
+    assert list(root.rglob("gpt.ckpt")) == []
+
+
+def test_import_rejects_source_changed_after_initial_hash(tmp_path, monkeypatch):
+    gpt, sovits = _import_sources(tmp_path)
+    copy = model_registry._copy_immutable
+
+    def mutate_then_copy(source, destination, expected_hash, *, model_root):
+        source.write_bytes(b"source replaced while importing")
+        return copy(source, destination, expected_hash, model_root=model_root)
+
+    monkeypatch.setattr(model_registry, "_copy_immutable", mutate_then_copy)
+    with pytest.raises(ValueError, match="changed during immutable copy"):
+        _import_pair(tmp_path, gpt, sovits)
+    root = tmp_path / "models"
+    assert list(root.rglob("*.tmp")) == []
+    assert list(root.rglob("model.json")) == []
+    assert list(root.rglob("gpt.ckpt")) == []
+
+
+def test_existing_manifest_is_never_overwritten_by_import(tmp_path):
+    gpt, sovits = _import_sources(tmp_path)
+    model_id = _import_pair(tmp_path, gpt, sovits)
+    manifest = (
+        tmp_path / "models" / "march-7th" / "gpt-sovits" / model_id / "model.json"
+    )
+    first_bytes = manifest.read_bytes()
+    _import_pair(tmp_path, gpt, sovits)
+    assert manifest.read_bytes() == first_bytes
+    with pytest.raises(ValueError, match="different manifest"):
+        _import_pair(tmp_path, gpt, sovits, name="Different Display Name")
+    assert manifest.read_bytes() == first_bytes
+
+
+def test_import_can_resume_after_second_weight_publish_failure(tmp_path, monkeypatch):
+    gpt, sovits = _import_sources(tmp_path)
+    original = model_registry.os.link
+    fired = {"once": False}
+
+    def fail_second_weight_once(source, destination, *args, **kwargs):
+        if str(destination).endswith("sovits.pth") and not fired["once"]:
+            fired["once"] = True
+            raise OSError("interrupted before second artifact publish")
+        return original(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(model_registry.os, "link", fail_second_weight_once)
+    with pytest.raises(OSError, match="second artifact"):
+        _import_pair(tmp_path, gpt, sovits)
+    root = tmp_path / "models"
+    published = list(root.rglob("gpt.ckpt"))
+    assert len(published) == 1
+    original_hash = model_registry.sha256_file(published[0])
+    assert list(root.rglob("sovits.pth")) == []
+    assert list(root.rglob("model.json")) == []
+    assert list(root.rglob("*.tmp")) == []
+
+    monkeypatch.setattr(model_registry.os, "link", original)
+    model_id = _import_pair(tmp_path, gpt, sovits)
+    assert model_registry.sha256_file(published[0]) == original_hash
+    assert model_registry.resolve_model(
+        model_id, model_root=root, registry_path=tmp_path / "model-registry.json"
+    )["model_id"] == model_id
+
+
+def test_import_rejects_symlinked_manifest_even_if_contents_are_identical(tmp_path):
+    gpt, sovits = _import_sources(tmp_path)
+    model_id = _import_pair(tmp_path, gpt, sovits)
+    model_dir = tmp_path / "models" / "march-7th" / "gpt-sovits" / model_id
+    manifest = model_dir / "model.json"
+    reference = tmp_path / "outside-manifest.json"
+    reference.write_bytes(manifest.read_bytes())
+    manifest.unlink()
+    try:
+        manifest.symlink_to(reference)
+    except (OSError, NotImplementedError):
+        pytest.skip("manifest symlinks unavailable")
+    with pytest.raises(ValueError, match="symlink"):
+        _import_pair(tmp_path, gpt, sovits)
+    assert reference.is_file()
