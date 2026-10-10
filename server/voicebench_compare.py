@@ -84,7 +84,9 @@ def _load_run(directory: Path, *, dataset: dict, test_ids: list[str]) -> dict:
         data = artifact.read_bytes()
         digest = hashlib.sha256(data).hexdigest()
         _sha(row.get("output_sha256"), "output_sha256")
-        if row["output_sha256"] != digest or row.get("output_bytes") != len(data):
+        if (row["output_sha256"] != digest
+                or type(row.get("output_bytes")) is not int
+                or row["output_bytes"] != len(data)):
             raise ValueError(f"output WAV hash or size mismatch: {item_id}")
         meta = _assert_wav(data)
         for field in ("frames", "channels", "sample_rate"):
@@ -95,7 +97,10 @@ def _load_run(directory: Path, *, dataset: dict, test_ids: list[str]) -> dict:
             raise ValueError(f"output WAV duration mismatch: {item_id}")
         elapsed = _number(row.get("elapsed_seconds"), "elapsed_seconds")
         rtf = _number(row.get("realtime_factor"), "realtime_factor")
-        if not math.isclose(rtf, elapsed / meta["duration_seconds"], rel_tol=0, abs_tol=2e-5):
+        # The runner rounds both elapsed and RTF to six decimals. Bound
+        # roundoff using the waveform duration rather than a fixed tolerance.
+        tolerance = 0.0000005 + 0.0000005 / meta["duration_seconds"]
+        if not math.isclose(rtf, elapsed / meta["duration_seconds"], rel_tol=0, abs_tol=tolerance):
             raise ValueError(f"output WAV realtime factor mismatch: {item_id}")
         if not isinstance(row.get("request_id"), str) or not row["request_id"]:
             raise ValueError(f"missing request ID: {item_id}")
