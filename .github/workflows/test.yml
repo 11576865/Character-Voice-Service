@@ -20,6 +20,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test Windows model asset and registry invariants
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pytest -q tests/test_model_registry.py tests/test_evaluation_registry.py tests/test_voice_bindings.py
       - name: Parse PowerShell scripts with Windows PowerShell 5.1
         shell: powershell
         run: |
