@@ -92,3 +92,14 @@ Run one configuration at a time and retain distinct run directories to
 later compare GPT-SoVITS and IndexTTS. Cross-engine score aggregation,
 unseen-text/long-form suites, human listening records, WER, MOS, speaker
 embedding comparison and statistical inference are separate later work.
+
+## Two-stage publication and offline comparison
+
+Generated audio is now journaled as `prepared` after a staged `.wav.part`
+file is durably written and before it is published under the final `.wav`
+name. `--resume` verifies and recovers the prepared output without
+regeneration after an interruption in that window. Untracked staged files
+fail closed and require operator investigation.
+
+Two complete runs can be checked using the [offline A/B audit](voicebench-comparison-v1.md).
+The comparison produces descriptive timings only and never a quality score.
