@@ -135,6 +135,16 @@ def test_forged_dataset_digest_never_promotes(tmp_path):
     assert not _promotable(record, tmp_path, benchmarks)
 
 
+def test_multiple_references_cannot_share_one_generation_revision(tmp_path):
+    _, _, report = _dataset(tmp_path)
+    record = _evaluation(report)
+    record["dataset"]["references"].append({
+        "reference_id": "second-reference", "item_id": "speaker",
+    })
+    with pytest.raises(ValueError, match="exactly one"):
+        evaluation_registry.write_evaluation(record, directory=tmp_path / "evaluations")
+
+
 def test_decision_boolean_strings_are_not_trusted(tmp_path):
     _, _, report = _dataset(tmp_path)
     record = _evaluation(report)
