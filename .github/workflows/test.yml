@@ -27,7 +27,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install -r requirements.txt
-          python -m pytest -q tests/test_model_registry.py tests/test_evaluation_registry.py tests/test_voice_bindings.py
+          python -m pytest -q tests/test_model_registry.py tests/test_evaluation_registry.py tests/test_voice_bindings.py tests/test_model_registry_transactions.py
       - name: Parse PowerShell scripts with Windows PowerShell 5.1
         shell: powershell
         run: |
