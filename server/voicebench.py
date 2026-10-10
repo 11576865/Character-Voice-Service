@@ -308,7 +308,13 @@ def run_voicebench(
                 saved["items"][item_id]["status"] = "ok"
                 _durable_json(checkpoint, saved)
             except (httpx.HTTPError, OSError, ValueError, json.JSONDecodeError) as exc:
-                if saved["items"][item_id].get("status") != "prepared":
+                recorded_status = saved["items"][item_id].get("status")
+                if recorded_status == "ok":
+                    # The final file may already have been published; keep
+                    # its journaled digest so --resume can finish without
+                    # overwriting or regenerating the output.
+                    saved["items"][item_id]["status"] = "prepared"
+                elif recorded_status != "prepared":
                     saved["items"][item_id] = {"status": "failed", "error": type(exc).__name__}
                 saved["status"] = "partial"
                 _durable_json(checkpoint, saved)
