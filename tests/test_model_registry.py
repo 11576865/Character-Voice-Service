@@ -443,3 +443,22 @@ def test_scan_reports_external_manifest_symlink_without_aborting(tmp_path):
     assert report["discovered"] == 0
     assert report["invalid"]
     assert not model_registry.load_registry(registry)["models"]
+
+
+def test_quarantined_model_cannot_resolve_even_if_files_are_restored(tmp_path):
+    model_root = tmp_path / "models"
+    registry = tmp_path / "registry.json"
+    manifest_path = make_manifest(model_root)
+    original_bytes = manifest_path.read_bytes()
+    model_registry.scan_model_root(model_root=model_root, registry_path=registry)
+    modified = json.loads(original_bytes.decode("utf-8"))
+    modified["name"] = "modified after scan"
+    manifest_path.write_text(json.dumps(modified), encoding="utf-8")
+    model_registry.scan_model_root(model_root=model_root, registry_path=registry)
+
+    # Restoring bytes alone is not an authorized quarantine clearance.
+    manifest_path.write_bytes(original_bytes)
+    with pytest.raises(ValueError, match="quarantined"):
+        model_registry.resolve_model(
+            "march7-gsv-v4-a", model_root=model_root, registry_path=registry,
+        )
