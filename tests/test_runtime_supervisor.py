@@ -214,3 +214,38 @@ def test_health_rejects_a_stopping_sidecar_even_when_http_returns_200(tmp_path, 
     healthy, reason = RuntimeSupervisor._health(spec)
     assert healthy is False
     assert "stopping" in reason
+
+
+def test_status_and_diagnostics_do_not_wait_for_long_lifecycle_lock(tmp_path):
+    import threading
+    import time
+
+    path = tmp_path / "registry.json"
+    script = tmp_path / "serve.py"
+    write_http_server(script)
+    write_registry(path, "test-engine", free_port(), script)
+    supervisor = RuntimeSupervisor(registry_path=path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def simulate_slow_startup():
+        with supervisor._lock:
+            entered.set()
+            release.wait(timeout=5)
+
+    worker = threading.Thread(target=simulate_slow_startup)
+    worker.start()
+    try:
+        assert entered.wait(timeout=2)
+        start = time.monotonic()
+        status = supervisor.status("test-engine")
+        diagnostic = supervisor.diagnostics()
+        assert time.monotonic() - start < 1.0
+        assert status["status"] == "supervisor-transition"
+        assert status["ready"] is False
+        assert status["supervisor_busy"] is True
+        assert diagnostic["runtimes"][0]["status"] == "supervisor-transition"
+    finally:
+        release.set()
+        worker.join(timeout=3)
+    assert not worker.is_alive()
