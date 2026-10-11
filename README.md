@@ -87,3 +87,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 外部 System Supervisor 激活去重
 
 [External activation single-flight v1](docs/runtime-external-activation-single-flight-v1.md) 对同一外部 `service_key` 的激活命令增加跨进程互斥和持久化待确认记录。超时不会自动重复投递激活命令；实时健康恢复后可按请求身份清理。陈旧的外部状态文件不再覆盖实时健康状态。此机制不代替外部 Supervisor 对 PID、GPU 资源及子进程树的生命周期管理。
+
+## 托管引擎进程树隔离
+
+[Managed runtime process-tree containment v1](docs/runtime-process-tree-containment-v1.md) 针对配置 `exclusive_group` 的托管引擎，使用 Linux/POSIX 独立会话与进程组、Windows kill-on-close Job Object 包装器，在停止时清理后代进程。直接 PID 意外退出但后代仍存活时保留 GPU 租约和所有权记录，拒绝自动接管。真实 GPU、逃逸子进程与外部 System Supervisor 仍需单独验证。
