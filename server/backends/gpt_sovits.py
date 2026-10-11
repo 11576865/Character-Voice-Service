@@ -1,6 +1,10 @@
 import hashlib
 import json
+import os
 import threading
+import time
+import uuid
+from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -158,6 +162,62 @@ def _synthesize_locked(text: str, speed: float, profile: dict, urls: tuple[str, 
         ) from exc
 
 
+def _transaction_paths(tts_url: str) -> tuple[str, Path, Path]:
+    key = "gpt-txn-" + hashlib.sha256(tts_url.encode("utf-8")).hexdigest()[:32]
+    root = DATA_DIR / "inference-transactions"
+    return key, root, root / (key + ".pending.json")
+
+
+def _begin_transaction(receipt: Path, *, tts_url: str, model: dict) -> str:
+    # Called only while holding the endpoint-scoped OS lock. Once a
+    # controller dies, that OS lease can disappear while the real backend
+    # is STILL synthesizing; the durable intent prevents unsafe takeover.
+    if receipt.exists() or receipt.is_symlink():
+        raise HTTPException(
+            status_code=503,
+            detail="GPT-SoVITS previous inference outcome is unresolved; "
+                   "inspect the actual backend before manually reconciling",
+            headers={"Retry-After": "5"},
+        )
+    request_id = uuid.uuid4().hex
+    intent = {
+        "schema_version": 1,
+        "phase": "pending",
+        "request_id": request_id,
+        "engine": "gpt-sovits",
+        "endpoint": tts_url,
+        "model_id": str(model.get("model_id") or model.get("id") or ""),
+        "started_unix": time.time(),
+    }
+    stage = receipt.with_name(receipt.name + "." + request_id + ".tmp")
+    try:
+        with stage.open("x", encoding="utf-8", newline="\\n") as stream:
+            json.dump(intent, stream, ensure_ascii=False, sort_keys=True)
+            stream.write("\\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(stage, receipt)
+    finally:
+        stage.unlink(missing_ok=True)
+    return request_id
+
+
+def _finish_transaction(receipt: Path, request_id: str) -> None:
+    try:
+        current = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="GPT-SoVITS completed but inference transaction receipt is unreadable",
+        ) from exc
+    if current.get("request_id") != request_id:
+        raise HTTPException(
+            status_code=503,
+            detail="GPT-SoVITS inference receipt identity changed; refusing to clear",
+        )
+    receipt.unlink()
+
+
 def synthesize(text: str, speed: float, profile: dict) -> bytes:
     # Local mutex prevents same-process request interleaving. The independent
     # OS lock must cover the entire weight-switch + inference transaction
@@ -167,9 +227,9 @@ def synthesize(text: str, speed: float, profile: dict) -> bytes:
     with _backend_lock:
         urls = _urls()  # Freeze the backend endpoint for one transaction.
         tts_url = urls[0]
-        lock_key = "gpt-txn-" + hashlib.sha256(tts_url.encode("utf-8")).hexdigest()[:32]
+        lock_key, root, receipt = _transaction_paths(tts_url)
         try:
-            lease = acquire_runtime_slot(lock_key, DATA_DIR / "inference-transactions")
+            lease = acquire_runtime_slot(lock_key, root)
         except OSError as exc:
             raise HTTPException(
                 status_code=503,
@@ -183,6 +243,15 @@ def synthesize(text: str, speed: float, profile: dict) -> bytes:
                 headers={"Retry-After": "2"},
             )
         try:
-            return _synthesize_locked(text, speed, profile, urls)
+            request_id = _begin_transaction(
+                receipt, tts_url=tts_url,
+                model=profile.get("selected_model") or {},
+            )
+            # Do not delete an ambiguous transaction on upstream I/O failure,
+            # timeout, weight-switch failure, or process termination. An
+            # operator must verify the backend is idle before clearing it.
+            audio = _synthesize_locked(text, speed, profile, urls)
+            _finish_transaction(receipt, request_id)
+            return audio
         finally:
             lease.release()
