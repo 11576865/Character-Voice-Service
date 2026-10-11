@@ -502,6 +502,11 @@ class RuntimeSupervisor:
 
             self._clean_exited(engine_id)
             owned = self._owned.get(engine_id)
+            if owned and owned.tree_uncertain:
+                raise RuntimeConflictError(
+                    f"{target.engine_id}: conflicting engine {engine_id} has "
+                    f"unresolved descendants: {owned.tree_uncertain}"
+                )
             if owned and owned.process.poll() is None:
                 self._stop_owned(engine_id, other)
                 continue
