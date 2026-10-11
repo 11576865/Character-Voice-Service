@@ -469,10 +469,12 @@ class RuntimeSupervisor:
                     stderr=subprocess.STDOUT,
                     creationflags=creationflags,
                 )
-            except Exception:
+            except OSError as exc:
                 log_handle.close()
                 self._record_failure(engine_id, "spawn-failed")
-                raise
+                raise RuntimeSupervisorError(
+                    f"{engine_id}: unable to spawn managed runtime: {exc}"
+                ) from exc
 
             self._owned[engine_id] = _OwnedProcess(
                 process=process,
