@@ -29,9 +29,11 @@ user machine repeatedly crashing, nor a claim of GPU-driver recovery.
   sequence; a process that ran for at least 300 seconds likewise resets
   the earlier failure sequence on its next observed exit.
 - While a cooldown is active, ordinary `ensure_ready()` and `start()`
-  fail quickly with a `RuntimeSupervisorError`, and diagnostic status
-  is `restart-backoff`. This is preferable to retrying a heavy broken
-  model load on every request.
+  avoid repeated multi-second health probes. They use an initial
+  **0.2-second bounded health check**, preserving recognition of an
+  already-healthy endpoint, and otherwise fail quickly with a
+  `RuntimeSupervisorError` and diagnostic `restart-backoff`.
+  This is preferable to retrying a heavy broken model load on every request.
 - Explicit administrative `restart(engine_id)` is a **manual override**:
   after its ordinary stop and endpoint checks, it clears the in-memory
   cooldown before attempting one new start. Prior `last_exit`
@@ -75,3 +77,19 @@ The suite runs in Linux full pytest and in the Windows targeted job.
 **GitHub CI remains Pending until the new PR run completes.** Real
 IndexTTS/GPT-SoVITS model-loading, actual GPU faults and external
 system-supervisor restart contracts remain field-pending.
+
+## CI timing regression
+
+The first GitHub Windows run of PR #23 passed 88 targeted cases but
+failed one test that assumed a 5-second real-time cooldown would still
+be active after multiple Windows HTTP health probes. The CI showed
+the crashed engine had been relaunched and failed as designed after
+its short cooldown expired; the failure was not evidence of an incorrect
+crash exit code.
+
+Follow-up uses a widened **test-only** cooldown for the slow-machine
+fault-injection scenario, while the independent backoff-policy test still
+verifies the true production 5/10/20/40/60-second sequence. Additional
+regressions verify that cooldown-path health probes use the bounded
+0.2-second timeout and a genuinely healthy endpoint still takes precedence
+over a stale local crash record. New Linux/Windows CI is pending.
