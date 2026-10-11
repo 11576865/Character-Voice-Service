@@ -119,3 +119,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## WAV 音频完整性验收
 
 [Speech WAV output integrity v1](docs/speech-wav-output-integrity-v1.md) 对 GPT-SoVITS、IndexTTS、通用 Sidecar 的合成结果使用统一的 RIFF/WAVE 与 PCM／浮点采样帧验证，禁止将错误 JSON、HTML、伪造 WAV 头或截断文件标注成成功音频。上游单次音频读取限制为 **128 MiB**，时长限制 **15 分钟**；有效 WAV 才能保存并返回 `audio/wav`。此验收仅证明音频容器结构，不证明实际模型／角色声音身份或真实 GPU 运行质量。
+
+## 公开模型发现与健康诊断隐私边界
+
+[Public diagnostics sanitization v1](docs/public-diagnostics-sanitization-v1.md) 对匿名 `/v1/models`、`/health` 及公开语音配置错误进行最小化错误处理：模型清单损坏、路径丢失和 Sidecar 健康异常不再直接返回本机绝对路径、后端异常字符串或内部请求标识。模型 ID、可用状态与部分安全健康指标保持公开；管理员权限与 TTS 模型流程不变。

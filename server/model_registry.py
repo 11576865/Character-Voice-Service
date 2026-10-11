@@ -468,8 +468,13 @@ def list_models(
                 item["name"] = resolved["name"]
                 item["language"] = resolved["language"]
                 item["capabilities"] = resolved["capabilities"]
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                item["error"] = str(exc)
+            except (OSError, ValueError, json.JSONDecodeError):
+                # This inventory is returned by unauthenticated GET /v1/models.
+                # Raw OSError (especially FileNotFoundError) can contain an
+                # absolute Model Root, private artifact or manifest path.
+                # Keep public API errors stable and path-free.
+                item["error"] = "model metadata unavailable"
+                item["error_code"] = "model-metadata-unavailable"
         items.append(item)
     return items
 
