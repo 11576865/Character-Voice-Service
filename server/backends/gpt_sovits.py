@@ -1,3 +1,4 @@
+import hashlib
 import json
 import threading
 import urllib.error
@@ -6,8 +7,9 @@ import urllib.request
 
 from fastapi import HTTPException
 
-from server.config import GPT_SOVITS_BASE_URL
+from server.config import DATA_DIR, GPT_SOVITS_BASE_URL
 from server.runtime_registry import runtime_base_url
+from server.runtime_slot_lease import acquire_runtime_slot
 
 # Compatibility constants for callers/tests; synthesis resolves the machine-local
 # Runtime Registry endpoint dynamically at call time.
@@ -57,7 +59,7 @@ def _set_weight(url: str, path: str, label: str) -> None:
         ) from exc
 
 
-def _ensure_selected_model(profile: dict) -> None:
+def _ensure_selected_model(profile: dict, urls: tuple[str, str, str]) -> None:
     global _active_managed_model
 
     model = profile.get("selected_model") or {}
@@ -78,13 +80,12 @@ def _ensure_selected_model(profile: dict) -> None:
         return
 
     signature = (str(gpt_weights), str(sovits_weights))
-    if signature == _active_managed_model:
-        return
-
-    # GPT-SoVITS exposes these as separate GET control endpoints. Keep the
-    # whole switch + synthesis operation under one lock so concurrent requests
-    # cannot cross model boundaries.
-    tts_url, set_gpt_url, set_sovits_url = _urls()
+    # The old in-memory cache is NOT proof of backend state: another CVS
+    # process can change weights, and a restarted GPT-SoVITS process can
+    # forget them while this process retains its module globals. Until the
+    # backend advertises an attested model/epoch, always reassert both weights
+    # for every managed transaction, including the same model twice.
+    _, set_gpt_url, set_sovits_url = urls
 
     _set_weight(
         set_sovits_url,
@@ -99,8 +100,8 @@ def _ensure_selected_model(profile: dict) -> None:
     _active_managed_model = signature
 
 
-def _synthesize_locked(text: str, speed: float, profile: dict) -> bytes:
-    _ensure_selected_model(profile)
+def _synthesize_locked(text: str, speed: float, profile: dict, urls: tuple[str, str, str]) -> bytes:
+    _ensure_selected_model(profile, urls)
     params = profile.get("parameters", {})
 
     payload = {
@@ -135,7 +136,7 @@ def _synthesize_locked(text: str, speed: float, profile: dict) -> bytes:
     }
 
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    tts_url, _, _ = _urls()
+    tts_url, _, _ = urls
     request = urllib.request.Request(
         tts_url,
         data=body,
@@ -158,5 +159,30 @@ def _synthesize_locked(text: str, speed: float, profile: dict) -> bytes:
 
 
 def synthesize(text: str, speed: float, profile: dict) -> bytes:
+    # Local mutex prevents same-process request interleaving. The independent
+    # OS lock must cover the entire weight-switch + inference transaction
+    # across *all cooperating CVS processes* targeting this exact endpoint.
+    # A launch/GPU-slot lock is not sufficient: it governs child lifetimes,
+    # not concurrent /set_weights and /tts requests from different parents.
     with _backend_lock:
-        return _synthesize_locked(text, speed, profile)
+        urls = _urls()  # Freeze the backend endpoint for one transaction.
+        tts_url = urls[0]
+        lock_key = "gpt-txn-" + hashlib.sha256(tts_url.encode("utf-8")).hexdigest()[:32]
+        try:
+            lease = acquire_runtime_slot(lock_key, DATA_DIR / "inference-transactions")
+        except OSError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"GPT-SoVITS inference admission unavailable: {exc}",
+                headers={"Retry-After": "2"},
+            ) from exc
+        if lease is None:
+            raise HTTPException(
+                status_code=503,
+                detail="GPT-SoVITS backend is busy with another CVS synthesis transaction",
+                headers={"Retry-After": "2"},
+            )
+        try:
+            return _synthesize_locked(text, speed, profile, urls)
+        finally:
+            lease.release()
