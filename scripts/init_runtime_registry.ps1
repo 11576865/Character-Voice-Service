@@ -288,6 +288,7 @@ $registry = [ordered]@{
                 INDEX_TTS_PORT = '9882'
                 INDEX_TTS_USE_BF16 = '1'
                 INDEX_TTS_USE_QWEN_EMO = '0'
+                INDEX_TTS_INFER_DEADLINE_SECONDS = '240'
             }
             path_prepend = @()
             dependencies = @(
