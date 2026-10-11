@@ -99,3 +99,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 外部 System Supervisor 文件协议端到端测试
 
 [External file-bridge consumer contract E2E v1](docs/runtime-external-consumer-contract-e2e-v1.md) 通过独立 Python 消费者进程，验证 CVS 发布激活命令、消费者启动 HTTP 健康端点、请求去重、超时后恢复，以及 CVS 控制进程异常终止后的待确认记录恢复。它是**模拟消费者的跨进程协议验收**，不是已安装 System Supervisor 或真实 GPU 的现场测试。
+
+## 外部 System Supervisor 部署前只读检查
+
+[External Supervisor read-only preflight v1](docs/runtime-external-supervisor-readonly-preflight-v1.md) 提供独立标准库命令 `scripts/external_supervisor_preflight.py`，交叉核查 CVS Registry、实际 Supervisor 服务与控制路径、外部状态文件和待确认激活请求。默认不发起命令、不探测网络、不启动进程，也不会因导入服务端配置初始化管理员令牌。使用 `--probe-health` 才会执行不跟随重定向的本机 HTTP GET。检查结果不能替代真实 Supervisor 请求确认和 GPU 验收。
