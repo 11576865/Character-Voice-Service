@@ -344,10 +344,39 @@ class RuntimeSupervisor:
                 if owner_receipt and not ready and state in {"stopped", "restart-backoff"}:
                     state = "ownership-unresolved"
 
+            external_activation = None
+            if not spec.managed:
+                control = spec.external_control or {}
+                if (
+                    str(control.get("mode") or "").strip().lower() == "file"
+                    and str(control.get("request_dir") or "").strip()
+                    and str(control.get("service_key") or "").strip()
+                ):
+                    try:
+                        old_request = pending_activation(
+                            str(control["request_dir"]).strip(),
+                            str(control["service_key"]).strip(),
+                        )
+                        if old_request is not None:
+                            external_activation = {
+                                "state": "pending",
+                                "request_id": old_request["request_id"],
+                                "engine_id": old_request["engine_id"],
+                                "created_unix": old_request.get("created_unix"),
+                            }
+                            if not ready:
+                                state = "external-activation-pending"
+                    except (ExternalActivationUncertain, OSError) as exc:
+                        external_activation = {
+                            "state": "unreadable", "reason": str(exc),
+                        }
+                        if not ready:
+                            state = "external-activation-unresolved"
+
             external = self._external_supervisor_status(spec) if not spec.managed else None
             external_pid = external.get("pid") if external else None
             external_state = str(external.get("supervisor_state") or "") if external else ""
-            if external_state and not ready:
+            if external_state and not ready and external_activation is None:
                 # External status files may lag behind live HTTP health. Do
                 # not advertise READY from an old receipt when the endpoint
                 # is unavailable, or mask a live busy/ready engine as stopped.
@@ -371,6 +400,7 @@ class RuntimeSupervisor:
                 "managed_by_supervisor": process_running,
                 "pid": owned.process.pid if process_running else external_pid,
                 "external_supervisor": external,
+                "external_activation": external_activation,
                 "endpoint": spec.endpoint,
                 "health_url": spec.health_url,
                 "exclusive_group": spec.exclusive_group,
@@ -719,6 +749,42 @@ class RuntimeSupervisor:
         finally:
             lease.release()
 
+    def _reconcile_healthy_external_activation(self, spec: RuntimeSpec) -> None:
+        """Recover a late successful activation without issuing a new command.
+
+        If another caller owns the activation lock, its own completion path
+        will reconcile the receipt. Avoid blocking a healthy engine request.
+        """
+        control = spec.external_control or {}
+        if str(control.get("mode") or "").strip().lower() != "file":
+            return
+        request_dir_raw = str(control.get("request_dir") or "").strip()
+        service_key = str(control.get("service_key") or "").strip()
+        if not request_dir_raw or not service_key:
+            return
+        try:
+            lease = acquire_activation_lease(request_dir_raw, service_key)
+        except OSError:
+            return
+        if lease is None:
+            return
+        try:
+            pending = pending_activation(request_dir_raw, service_key)
+            if pending and pending["engine_id"] == spec.engine_id:
+                # The first health sample was observed outside this mutex.
+                # Revalidate against the live endpoint before clearing.
+                healthy, _ = self._health(spec, timeout=0.5)
+                if healthy:
+                    acknowledge_activation(
+                        request_dir_raw, service_key, pending["request_id"],
+                    )
+        except (ExternalActivationUncertain, OSError):
+            # Preserve ambiguous evidence; an unavailable receipt must not
+            # turn a live healthy engine into a new activation request.
+            pass
+        finally:
+            lease.release()
+
     def ensure_ready(self, engine_id: str) -> dict | None:
         registry = self.registry()
         spec = registry.get(engine_id)
@@ -734,6 +800,8 @@ class RuntimeSupervisor:
 
         ready, _ = self._health(spec)
         if ready:
+            if not spec.managed:
+                self._reconcile_healthy_external_activation(spec)
             return self.status(engine_id)
         if spec.managed and spec.start_on_demand:
             return self.start(engine_id)
