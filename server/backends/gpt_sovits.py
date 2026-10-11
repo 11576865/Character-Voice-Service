@@ -243,9 +243,20 @@ def synthesize(text: str, speed: float, profile: dict) -> bytes:
                 headers={"Retry-After": "2"},
             )
         try:
+            # Reject a known-invalid local mode transition before writing an
+            # uncertain-outcome receipt: no backend operation has begun yet.
+            selected = profile.get("selected_model") or {}
+            if (
+                not (selected.get("gpt_weights") and selected.get("sovits_weights"))
+                and _active_managed_model is not None
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="The selected model is externally loaded, but this CVS process "
+                           "already switched GPT-SoVITS to a managed model",
+                )
             request_id = _begin_transaction(
-                receipt, tts_url=tts_url,
-                model=profile.get("selected_model") or {},
+                receipt, tts_url=tts_url, model=selected,
             )
             # Do not delete an ambiguous transaction on upstream I/O failure,
             # timeout, weight-switch failure, or process termination. An
