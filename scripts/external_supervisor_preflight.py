@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
 _REQUEST_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -64,7 +64,8 @@ def _probe(url: str, timeout: float):
     if not _loopback_url(url):
         return {"state": "refused", "detail": "health probe must use loopback http://"}
     try:
-        opener = build_opener(_NoRedirect)
+        # Never route a localhost health read through an environment proxy.
+        opener = build_opener(ProxyHandler({}), _NoRedirect)
         with opener.open(Request(url, headers={"Accept": "application/json"}), timeout=timeout) as response:
             raw = response.read(4096)
             status = response.status
