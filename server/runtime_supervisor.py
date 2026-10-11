@@ -79,10 +79,22 @@ class RuntimeSupervisor:
 
     @contextmanager
     def _guard_group(self, spec: RuntimeSpec):
-        # Same OS group activity lease used by the inference endpoint, so
-        # start, stop, restart and auto-stop siblings cannot race /tts.
+        # A live managed process can outlast registry edits/removal.
+        # Its ORIGINAL ownership group, not a newly edited config value,
+        # is the resource that must be protected before stop/restart.
+        owned = self._owned.get(spec.engine_id)
+        group = (
+            owned.slot_lease.group
+            if owned is not None and owned.slot_lease is not None
+            else spec.exclusive_group
+        )
+        if owned and owned.slot_lease and spec.exclusive_group not in {None, group}:
+            raise RuntimeConflictError(
+                f"{spec.engine_id}: configured GPU group changed while managed "
+                "process is alive; refuse uncoordinated lifecycle handoff"
+            )
         try:
-            with runtime_group_guard(spec.exclusive_group, self._slot_dir) as guard:
+            with runtime_group_guard(group, self._slot_dir) as guard:
                 yield guard
         except RuntimeGroupAdmissionError as exc:
             raise RuntimeConflictError(
