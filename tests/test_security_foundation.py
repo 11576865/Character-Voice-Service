@@ -6,6 +6,7 @@ they never read, replace or log the host's actual admin token.
 import os
 import stat
 import subprocess
+import time
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -119,3 +120,71 @@ def test_token_created_private_even_with_umask_zero(tmp_path):
     assert result.returncode == 0, result.stderr
     path = tmp_path / "private-data" / "admin-token.txt"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_second_cvs_cannot_read_token_during_half_written_bootstrap(tmp_path):
+    # A real OS process writes only part of a token while owning the exact
+    # production bootstrap lock. A second import must block until the
+    # writer finishes and unlocks, never accepting a truncated credential.
+    data_dir = tmp_path / "private-data"
+    data_dir.mkdir()
+    marker, release = tmp_path / "writer-holds-lock", tmp_path / "release-writer"
+    source = """
+import os, sys, time
+from pathlib import Path
+from server.runtime_slot_lease import acquire_runtime_slot
+folder, marker, release = map(Path, sys.argv[1:])
+lease = acquire_runtime_slot("admin-token", folder)
+assert lease is not None
+with (folder / "admin-token.txt").open("w", encoding="utf-8") as stream:
+    stream.write("first-half-")
+    stream.flush()
+    Path(marker).write_text("locked", encoding="utf-8")
+    deadline = time.monotonic() + 15
+    while not Path(release).exists() and time.monotonic() < deadline:
+        time.sleep(0.025)
+    assert Path(release).exists()
+    stream.write("second-half" + chr(10))
+    stream.flush()
+    os.fsync(stream.fileno())
+lease.release()
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(_REPO) + os.pathsep + env.get("PYTHONPATH", "")
+    writer = subprocess.Popen(
+        [sys.executable, "-c", source, str(data_dir), str(marker), str(release)],
+        cwd=str(_REPO), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    reader = None
+    try:
+        deadline = time.monotonic() + 8
+        while not marker.exists() and writer.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.025)
+        assert marker.exists(), writer.communicate(timeout=1) if writer.poll() is not None else "writer not ready"
+
+        reader_env = dict(env)
+        reader_env["CVS_DATA_DIR"] = str(data_dir)
+        reader_env.pop("CVS_ADMIN_TOKEN", None)
+        reader = subprocess.Popen(
+            [sys.executable, "-c", _READ], cwd=str(_REPO),
+            env=reader_env, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+        )
+        time.sleep(0.2)
+        assert reader.poll() is None, "reader must not accept a partial token"
+        release.touch()
+        stdout, stderr = reader.communicate(timeout=10)
+        assert reader.returncode == 0, stderr
+        assert stdout.splitlines()[0] == "first-half-second-half"
+        assert (data_dir / "admin-token.txt").read_text().strip() == "first-half-second-half"
+    finally:
+        release.touch()
+        if reader and reader.poll() is None:
+            reader.kill()
+            reader.communicate(timeout=6)
+        if writer.poll() is None:
+            writer.wait(timeout=7)
+        else:
+            writer.communicate(timeout=4)
+    assert writer.returncode == 0
