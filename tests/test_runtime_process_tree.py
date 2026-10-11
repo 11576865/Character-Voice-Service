@@ -88,6 +88,7 @@ else:
     data["engines"]["engine"]["env"].update({
         "TEST_CHILD_MARKER": str(marker),
         "TEST_ROOT_EXITS": "1" if root_exits else "0",
+        "TEST_PORT": str(port),
     })
     registry.write_text(json.dumps(data), encoding="utf-8")
     root = tmp_path / "slots"
