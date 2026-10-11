@@ -1,3 +1,4 @@
+from wav_fixtures import make_pcm_wav
 import json
 import urllib.error
 
@@ -45,8 +46,8 @@ class FakeResponse:
     def __exit__(self, *args):
         return False
 
-    def read(self):
-        return self.body
+    def read(self, size=-1):
+        return self.body if size < 0 else self.body[:size]
 
     def close(self):
         pass
@@ -67,12 +68,12 @@ def test_synthesize_maps_profile_to_backend_payload(monkeypatch):
         captured["url"] = request.full_url
         captured["timeout"] = timeout
         captured["payload"] = json.loads(request.data.decode("utf-8"))
-        return FakeResponse(b"wav-data")
+        return FakeResponse(make_pcm_wav())
 
     monkeypatch.setattr(backend.urllib.request, "urlopen", fake_urlopen)
     result = backend.synthesize("Hello", 1.2, BASE_PROFILE)
 
-    assert result == b"wav-data"
+    assert result == make_pcm_wav()
     assert captured["url"] == backend.GPT_SOVITS_TTS_URL
     assert captured["timeout"] == 120
     assert captured["payload"]["text"] == "Hello"
@@ -92,13 +93,13 @@ def test_managed_model_switches_weights_before_tts_and_reuses_loaded_model(monke
         calls.append(url)
         if isinstance(request, str):
             return FakeResponse(b'{"message":"success"}')
-        return FakeResponse(b"wav-data")
+        return FakeResponse(make_pcm_wav())
 
     monkeypatch.setattr(backend.urllib.request, "urlopen", fake_urlopen)
     profile = managed_profile()
 
-    assert backend.synthesize("One", 1.0, profile) == b"wav-data"
-    assert backend.synthesize("Two", 1.0, profile) == b"wav-data"
+    assert backend.synthesize("One", 1.0, profile) == make_pcm_wav()
+    assert backend.synthesize("Two", 1.0, profile) == make_pcm_wav()
 
     assert calls[0].startswith(backend.GPT_SOVITS_SET_SOVITS_WEIGHTS_URL)
     assert "D%3A%2Fmodels%2Fa.pth" in calls[0]
@@ -117,7 +118,7 @@ def test_switching_registered_model_loads_new_weight_pair(monkeypatch):
     def fake_urlopen(request, timeout):
         url = request if isinstance(request, str) else request.full_url
         calls.append(url)
-        return FakeResponse(b"wav-data")
+        return FakeResponse(make_pcm_wav())
 
     monkeypatch.setattr(backend.urllib.request, "urlopen", fake_urlopen)
 
@@ -136,7 +137,7 @@ def test_switching_registered_model_loads_new_weight_pair(monkeypatch):
 
 def test_external_model_is_rejected_after_service_managed_switch(monkeypatch):
     def fake_urlopen(request, timeout):
-        return FakeResponse(b"wav-data")
+        return FakeResponse(make_pcm_wav())
 
     monkeypatch.setattr(backend.urllib.request, "urlopen", fake_urlopen)
     backend.synthesize("Managed", 1.0, managed_profile())
@@ -218,15 +219,15 @@ def test_backend_restart_cannot_reuse_stale_weight_cache(monkeypatch):
             switched.append("gpt")
             return FakeResponse(b"ok")
         assert loaded == {"gpt": "D:/models/a.ckpt", "sovits": "D:/models/a.pth"}
-        return FakeResponse(b"mock-audio")
+        return FakeResponse(make_pcm_wav())
 
     monkeypatch.setattr(backend.urllib.request, "urlopen", fake_urlopen)
     profile = managed_profile()
-    assert backend.synthesize("Before restart", 1.0, profile) == b"mock-audio"
+    assert backend.synthesize("Before restart", 1.0, profile) == make_pcm_wav()
 
     # Simulate actual backend process death/restart, not CVS module reload.
     loaded.update(gpt=None, sovits=None)
-    assert backend.synthesize("After restart", 1.0, profile) == b"mock-audio"
+    assert backend.synthesize("After restart", 1.0, profile) == make_pcm_wav()
     assert switched == ["sovits", "gpt", "sovits", "gpt"]
 
 
