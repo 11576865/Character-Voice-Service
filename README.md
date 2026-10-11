@@ -83,3 +83,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 异常退出后的引擎所有权恢复
 
 [Managed runtime orphan-owner receipt v1](docs/runtime-orphan-ownership-receipt-v1.md) 在 GPU 组锁保护下持久化启动意图、子进程 PID 与进程创建身份。CVS 父进程崩溃后，新的管理实例不会仅因锁释放而假定 GPU 已空闲；若旧引擎仍存活、启动记录不完整或无法验证，就拒绝重复启动并要求人工核查。当前适用 Linux/Windows 托管引擎，不代表所有 GPU 子进程或外部 Supervisor 都已纳入同一协议。
+
+## 外部 System Supervisor 激活去重
+
+[External activation single-flight v1](docs/runtime-external-activation-single-flight-v1.md) 对同一外部 `service_key` 的激活命令增加跨进程互斥和持久化待确认记录。超时不会自动重复投递激活命令；实时健康恢复后可按请求身份清理。陈旧的外部状态文件不再覆盖实时健康状态。此机制不代替外部 Supervisor 对 PID、GPU 资源及子进程树的生命周期管理。
