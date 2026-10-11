@@ -1,4 +1,8 @@
 import json
+import io
+import wave
+
+from wav_fixtures import make_pcm_wav
 
 from fastapi.testclient import TestClient
 
@@ -51,7 +55,7 @@ def test_speech_returns_contract_metadata(tmp_path, monkeypatch):
     _write_profile(tmp_path / "march-7th.json")
     monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
     monkeypatch.setattr(app_module, "SAVE_GENERATED_WAV", False)
-    monkeypatch.setattr(app_module, "synthesize", lambda **kwargs: b"RIFF....WAVE")
+    monkeypatch.setattr(app_module, "synthesize", lambda **kwargs: make_pcm_wav())
 
     response = client.post("/v1/audio/speech", json={
         "voice": "march-7th",
@@ -60,6 +64,10 @@ def test_speech_returns_contract_metadata(tmp_path, monkeypatch):
     })
 
     assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/wav")
+    with wave.open(io.BytesIO(response.content), "rb") as decoded:
+        assert decoded.getnframes() > 0
+        assert decoded.getframerate() == 24000
     assert response.headers["x-cvs-voice"] == "march-7th"
     assert response.headers["x-cvs-engine"] == "gpt-sovits"
     assert response.headers["x-selected-reference"] == "neutral"
@@ -121,7 +129,7 @@ def test_speech_routes_to_index_tts_runtime_binding(tmp_path, monkeypatch):
     monkeypatch.setattr(
         app_module,
         "synthesize",
-        lambda **kwargs: calls.append(kwargs) or b"RIFF....WAVE",
+        lambda **kwargs: calls.append(kwargs) or make_pcm_wav(),
     )
 
     response = client.post("/v1/audio/speech", json={
@@ -140,7 +148,7 @@ def test_generation_revision_includes_formal_binding_identity(tmp_path, monkeypa
     _write_profile(tmp_path / "march-7th.json")
     monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
     monkeypatch.setattr(app_module, "SAVE_GENERATED_WAV", False)
-    monkeypatch.setattr(app_module, "synthesize", lambda **kwargs: b"RIFF....WAVE")
+    monkeypatch.setattr(app_module, "synthesize", lambda **kwargs: make_pcm_wav())
 
     base_selection = {
         "name": "March 7th",
@@ -230,7 +238,7 @@ def test_generation_revision_includes_runtime_identity(tmp_path, monkeypatch):
     _write_profile(tmp_path / "march-7th.json")
     monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
     monkeypatch.setattr(app_module, "SAVE_GENERATED_WAV", False)
-    monkeypatch.setattr(app_module, "synthesize", lambda **kwargs: b"RIFF....WAVE")
+    monkeypatch.setattr(app_module, "synthesize", lambda **kwargs: make_pcm_wav())
     monkeypatch.setattr(
         app_module.runtime_supervisor,
         "ensure_ready",
