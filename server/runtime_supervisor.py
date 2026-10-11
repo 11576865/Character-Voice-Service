@@ -229,6 +229,7 @@ class RuntimeSupervisor:
             "returncode": code,
             "uptime_seconds": round(uptime, 2),
             "observed_unix": time.time(),
+            "log_path": str(owned.log_path),
             "reason": "unexpected-exit",
         }
         self._record_failure(engine_id, "unexpected-exit")
