@@ -75,3 +75,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 引擎异常退出与重启限流
 
 [Runtime Supervisor crash-loop containment v1](docs/runtime-crash-loop-containment-v1.md) 保留托管引擎的异常退出码与日志路径，并对重复启动失败采用 5–60 秒自动重试退避。正常停机不触发退避；管理员显式重启可以覆盖退避，但不会清除上一条退出记录。本机制为进程内防护，不替代真实 GPU 故障验收。
+
+## 跨进程 GPU 独占组租约
+
+[Runtime GPU slot ownership v1](docs/runtime-slot-cross-process-v1.md) 为托管引擎增加操作系统文件锁：同一 `CVS_DATA_DIR` 的多个 CVS 进程不再仅凭健康探测同时启动占用同一 `exclusive_group` 的语音引擎。租约随已观测的托管子进程生命周期持有，异常终止和正常停止会释放。它不能证明 CVS 父进程崩溃后没有遗留仍在占用 GPU 的孤儿引擎，也不自动协调独立的 System Supervisor。
