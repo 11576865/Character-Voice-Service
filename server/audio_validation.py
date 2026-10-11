@@ -59,8 +59,6 @@ def validate_wav_bytes(audio: bytes) -> bytes:
         remaining = size - position
         if chunk_size > remaining:
             raise InvalidWav("WAV chunk extends beyond response payload")
-        payload_position = position
-
         if chunk_id == b"fmt ":
             if fmt is not None or chunk_size < 16:
                 raise InvalidWav("missing, duplicated or truncated WAV fmt chunk")
@@ -90,6 +88,8 @@ def validate_wav_bytes(audio: bytes) -> bytes:
             fmt = (rate, alignment)
 
         elif chunk_id == b"data":
+            if fmt is None:
+                raise InvalidWav("WAV data precedes its fmt chunk")
             if data_bytes is not None:
                 raise InvalidWav("multiple WAV data chunks are unsupported")
             data_bytes = chunk_size
@@ -99,8 +99,6 @@ def validate_wav_bytes(audio: bytes) -> bytes:
             if position >= size:
                 raise InvalidWav("missing WAV chunk padding byte")
             position += 1
-        if position <= payload_position and chunk_size:
-            raise InvalidWav("invalid WAV chunk progression")
 
     if position != size or fmt is None or data_bytes is None:
         raise InvalidWav("missing WAV fmt or data chunk")
