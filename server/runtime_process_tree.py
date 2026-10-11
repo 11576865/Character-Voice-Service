@@ -136,7 +136,12 @@ def reconcile_exited_tree(process: subprocess.Popen, group: str | None) -> None:
     direct child returned a code.
     """
     if group and os.name != "nt":
-        stop_managed_tree(process, group, 0.5)
+        remaining = _live_posix_group_members(process.pid)
+        if remaining is not False:
+            raise ProcessTreeUncertain(
+                f"managed process group {process.pid} has surviving or "
+                "unverifiable descendants; an explicit stop is required"
+            )
     # On Windows the wrapper's own OS Job Object closes on wrapper exit,
     # initiating kill-on-job-close for its child and descendants. No
     # assertion is made here about live GPU driver state.
