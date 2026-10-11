@@ -1,0 +1,44 @@
+{
+  "packet_version": 1,
+  "packet_id": "ci-11576865-Character-Voice-Service-38119966045-1",
+  "status": "pending",
+  "record_type": "ci_failure",
+  "title": "CVS tests: failure",
+  "summary": "Tracked CI workflow did not complete successfully. Source adapter captured failed job/step evidence when available.",
+  "source_repository": "11576865/Character-Voice-Service",
+  "source_event": "workflow_run",
+  "source_ref": "fix/external-activation-idempotency-receipt-v1",
+  "source_sha": "809efd8bd508f577a66e00641f22063664b90d32",
+  "source_url": "https://github.com/11576865/Character-Voice-Service/actions/runs/38119966045",
+  "created_at": "2026-10-11T07:03:31+00:00",
+  "dedupe_key": "workflow_run:11576865/Character-Voice-Service:38119966045:1",
+  "routing_hints": [
+    "architecture",
+    "operations",
+    "red-reason",
+    "reliability"
+  ],
+  "evidence": {
+    "workflow": "CVS tests",
+    "run_id": "38119966045",
+    "run_attempt": "1",
+    "conclusion": "failure",
+    "trigger_event": "push",
+    "failed_jobs": [
+      {
+        "id": 114412472047,
+        "name": "windows-script-audit",
+        "conclusion": "failure"
+      }
+    ],
+    "failed_steps": [
+      {
+        "job": "windows-script-audit",
+        "number": 4,
+        "name": "Test Windows model, inference and runtime invariants",
+        "conclusion": "failure"
+      }
+    ],
+    "capture_error": ""
+  }
+}
