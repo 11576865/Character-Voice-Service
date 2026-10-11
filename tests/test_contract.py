@@ -318,3 +318,38 @@ def test_speech_resolve_returns_runtime_provenance_without_synthesis(tmp_path, m
     assert payload["runtime_revision"] == "r" * 64
     assert len(payload["generation_revision"]) == 64
     assert called["synthesize"] == 0
+
+
+def test_speech_rejects_invalid_backend_audio_without_saving_or_success_metadata(tmp_path, monkeypatch):
+    _write_profile(tmp_path / "march-7th.json")
+    monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
+    saved = []
+    monkeypatch.setattr(app_module, "save_wav", lambda audio: saved.append(audio))
+    monkeypatch.setattr(app_module, "synthesize", lambda **kwargs: b"RIFF....WAVE")
+
+    response = client.post("/v1/audio/speech", json={
+        "voice": "march-7th",
+        "input": "Invalid upstream audio must not become successful output.",
+    })
+    assert response.status_code == 502
+    assert "invalid generated WAV" in response.json()["detail"]
+    assert saved == []
+    assert "x-cvs-generation-revision" not in response.headers
+    assert "x-generated-filename" not in response.headers
+
+
+def test_speech_rejects_upstream_json_200_as_audio(tmp_path, monkeypatch):
+    _write_profile(tmp_path / "march-7th.json")
+    monkeypatch.setattr(app_module, "VOICE_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "SAVE_GENERATED_WAV", False)
+    monkeypatch.setattr(
+        app_module,
+        "synthesize",
+        lambda **kwargs: b'{"error":"backend internal failure"}',
+    )
+
+    response = client.post("/v1/audio/speech", json={
+        "voice": "march-7th", "input": "Should return a 502, not audio/wav.",
+    })
+    assert response.status_code == 502
+    assert response.headers["content-type"].startswith("application/json")
