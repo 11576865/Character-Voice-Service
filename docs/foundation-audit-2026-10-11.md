@@ -16,7 +16,7 @@
 
 | ID | 严重程度 | 子系统 | 源码事实／风险 | 本 PR 动作或状态 |
 |---|---|---|---|---|
-| SEC-01 | P0 | 管理员身份 | `server/config.py::_admin_token()` 此前为普通 `exists/read/write_text` 流程；并发进程可在同一文件未创建时分别生成不同口令并覆盖文件，造成运行实例间身份状态不一致。默认创建的文件权限还受 POSIX umask 影响 | **本 PR 修复**：独占创建、等待同一持久化令牌、fsync、权限 0600、损坏／未完成时拒绝启动；跨进程测试待 CI |
+| SEC-01 | P0 | 管理员身份 | `server/config.py::_admin_token()` 此前为普通 `exists/read/write_text` 流程；并发进程可在同一文件未创建时分别生成不同口令并覆盖文件，造成运行实例间身份状态不一致。默认创建的文件权限还受 POSIX umask 影响 | **本 PR 修复**：跨进程 OS 锁覆盖令牌创建与读取、O_EXCL 独占创建、fsync、权限 0600、损坏／未完成时拒绝启动；跨进程测试待 CI |
 | SEC-02 | P1 | 默认网络边界 | `server/config.py` 原默认 `CVS_HOST=0.0.0.0`，在未配置防火墙情况下可将 HTTP 服务暴露于所有网络接口；管理员鉴权令牌仍通过 HTTP 请求头发送 | **本 PR 修复默认值**：`127.0.0.1`；显式 `CVS_HOST=0.0.0.0` 仍可用于局域网客户端，但必须另外提供防火墙、可信网段与安全传输边界 |
 | SEC-03 | P1 | 公共工作负载入口 | `server/app.py` 的 `/v1/audio/speech`、`/v1/audio/resolve` 依公开 v1 契约不要求 admin token；`SpeechRequest.input` 尚无独立字符数量上限，`speed` 只检查 `> 0`；未看到应用层速率／并发／每客户端资源配额 | **待单独设计受控资源预算**：保留公开客户端契约，先明确输入上限、并发拒绝、局域网调用安全策略和音频流资源限制，不在本安全修复 PR 偷偷添加 breaking auth |
 | TEST-01 | P1 | 构建与回归 | `.github/workflows/test.yml` Linux 运行全部 `pytest`，Windows 只执行硬编码的文件列表。新测试若忘记加到 Windows 清单，Linux 绿灯无法证明 Windows 路径被覆盖 | **本 PR 加入安全测试**；后续应将 Windows 关键路径覆盖声明与检查自动化，避免手工清单漏项 |
