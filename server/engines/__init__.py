@@ -4,6 +4,9 @@ from server.engine_registry import load_engine_descriptors
 from server.engines.gpt_sovits import GPTSoVITSAdapter
 from server.engines.index_tts import IndexTTSAdapter
 from server.engines.sidecar import SidecarV1Adapter
+from fastapi import HTTPException
+
+from server.runtime_inference_admission import RuntimeGroupAdmissionError, runtime_group_guard
 from server.runtime_supervisor import runtime_supervisor
 
 
@@ -58,5 +61,45 @@ def list_engines() -> list[dict]:
 def synthesize(text: str, speed: float, profile: dict) -> bytes:
     model = profile.get("selected_model") or {}
     engine_id = str(model.get("engine") or "gpt-sovits")
-    runtime_supervisor.ensure_ready(engine_id)
-    return get_adapter(engine_id).synthesize(text, speed, profile)
+    registry_spec = runtime_supervisor.registry().get(engine_id)
+    group = registry_spec.exclusive_group if registry_spec and registry_spec.enabled else None
+    owned = runtime_supervisor._owned.get(engine_id)
+    if owned is not None and owned.slot_lease is not None:
+        if group not in {None, owned.slot_lease.group}:
+            raise HTTPException(
+                status_code=503,
+                detail=f"{engine_id}: GPU ownership group changed during engine lifetime",
+            )
+        group = owned.slot_lease.group
+    try:
+        # Acquire GPU group activity BEFORE ensure_ready(), because that call
+        # may launch an engine and auto-stop its managed sibling. The
+        # operation lock is reentrant only on this thread, so the nested
+        # start() remains legal but unrelated stop()/start() calls lose.
+        with runtime_group_guard(group, runtime_supervisor._slot_dir) as admission:
+            runtime_supervisor.ensure_ready(engine_id)
+            adapter = get_adapter(engine_id)
+            request_id = admission.begin_inference(engine_id) if admission else None
+            # Only a completed synthesis response retires the durable
+            # in-flight evidence. Timeouts, connection drops and abnormal
+            # controller termination must not assume GPU work has stopped.
+            try:
+                audio = adapter.synthesize(text, speed, profile)
+            except HTTPException as exc:
+                # Built-in adapter 400/409 responses are deterministic local
+                # validation/model-mode refusals, before any TTS HTTP request
+                # is submitted. They cannot represent an in-flight GPU job.
+                # Upstream HTTP errors are translated to 502/503 and retain
+                # the conservative pending receipt for operator review.
+                if admission and request_id and exc.status_code in {400, 409}:
+                    admission.finish_inference(request_id)
+                raise
+            if admission and request_id:
+                admission.finish_inference(request_id)
+            return audio
+    except RuntimeGroupAdmissionError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{engine_id}: GPU inference admission denied: {exc}",
+            headers={"Retry-After": "2"},
+        ) from exc

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+from contextlib import contextmanager
 import os
 import subprocess
 import json
@@ -15,6 +16,7 @@ from typing import BinaryIO
 from server.config import DATA_DIR
 from server.runtime_registry import RuntimeRegistry, RuntimeSpec, load_runtime_registry
 from server.runtime_slot_lease import RuntimeSlotLease, acquire_runtime_slot
+from server.runtime_inference_admission import RuntimeGroupAdmissionError, runtime_group_guard
 from server.runtime_process_tree import (
     ProcessTreeUncertain, managed_command, spawn_options,
     reconcile_exited_tree, stop_managed_tree,
@@ -74,6 +76,30 @@ class RuntimeSupervisor:
 
     def registry(self) -> RuntimeRegistry:
         return load_runtime_registry(self._registry_path)
+
+    @contextmanager
+    def _guard_group(self, spec: RuntimeSpec):
+        # A live managed process can outlast registry edits/removal.
+        # Its ORIGINAL ownership group, not a newly edited config value,
+        # is the resource that must be protected before stop/restart.
+        owned = self._owned.get(spec.engine_id)
+        group = (
+            owned.slot_lease.group
+            if owned is not None and owned.slot_lease is not None
+            else spec.exclusive_group
+        )
+        if owned and owned.slot_lease and spec.exclusive_group not in {None, group}:
+            raise RuntimeConflictError(
+                f"{spec.engine_id}: configured GPU group changed while managed "
+                "process is alive; refuse uncoordinated lifecycle handoff"
+            )
+        try:
+            with runtime_group_guard(group, self._slot_dir) as guard:
+                yield guard
+        except RuntimeGroupAdmissionError as exc:
+            raise RuntimeConflictError(
+                f"{spec.engine_id}: GPU group lifecycle admission denied: {exc}"
+            ) from exc
 
     @staticmethod
     def _health(spec: RuntimeSpec, timeout: float = 1.5) -> tuple[bool, str | None]:
@@ -488,7 +514,8 @@ class RuntimeSupervisor:
             spec = self.registry().get(engine_id)
             if spec is None:
                 raise RuntimeSupervisorError(f"runtime is not configured: {engine_id}")
-            return self._stop_owned(engine_id, spec)
+            with self._guard_group(spec):
+                return self._stop_owned(engine_id, spec)
 
     def _enforce_exclusive_group(self, target: RuntimeSpec, registry: RuntimeRegistry) -> None:
         if not target.exclusive_group:
@@ -528,181 +555,183 @@ class RuntimeSupervisor:
             if not spec.enabled:
                 raise RuntimeSupervisorError(f"runtime is disabled: {engine_id}")
 
-            # Reap a dead managed process before selecting health timeout:
-            # during restart backoff, do not spend multiple seconds waiting
-            # for a known-offline health endpoint on every client request.
-            self._clean_exited(engine_id)
-            remaining = self._restart_cooldown(engine_id) if spec.managed else 0.0
-            ready, _ = self._health(spec, timeout=0.2 if remaining > 0 else 1.5)
-            if ready:
-                return self.status(engine_id)
-            if not spec.managed:
-                raise RuntimeSupervisorError(
-                    f"{engine_id} is external-only and is not currently healthy"
-                )
-
-            owned = self._owned.get(engine_id)
-            if owned and owned.tree_uncertain:
-                raise RuntimeConflictError(
-                    f"{engine_id}: previous managed process tree unresolved: "
-                    f"{owned.tree_uncertain}; stop or investigate before retry"
-                )
-            if owned and owned.process.poll() is None:
-                return self.status(engine_id)
-
-            if remaining > 0:
-                raise RuntimeSupervisorError(
-                    f"{engine_id}: restart backoff active for {remaining:.1f}s "
-                    "after a failed runtime attempt; retry later or use explicit admin restart"
-                )
-
-            if spec.executable is None or not spec.executable.is_file():
-                raise RuntimeSupervisorError(
-                    f"{engine_id}: executable does not exist: {spec.executable}"
-                )
-            if spec.cwd is None or not spec.cwd.is_dir():
-                raise RuntimeSupervisorError(
-                    f"{engine_id}: cwd does not exist: {spec.cwd}"
-                )
-
-            self._enforce_exclusive_group(spec, registry)
-
-            # Cooperative lock first, then reconcile a durable receipt
-            # left by any previous parent that may have died.
-            slot_lease = None
-            if spec.exclusive_group:
-                slot_lease = acquire_runtime_slot(spec.exclusive_group, self._slot_dir)
-                if slot_lease is None:
-                    raise RuntimeConflictError(
-                        f"{engine_id}: exclusive runtime group {spec.exclusive_group} "
-                        "is held by another CVS process; do not start a second GPU engine"
-                    )
-            process = None
-            log_handle = None
-            launch_id = None
-            try:
-                if slot_lease:
-                    try:
-                        reconcile_prior_owner(spec.exclusive_group, self._slot_dir)
-                    except UncertainRuntimeOwner as exc:
-                        raise RuntimeConflictError(str(exc)) from exc
-
-                self._log_dir.mkdir(parents=True, exist_ok=True)
-                log_path = self._log_dir / f"{engine_id}.log"
-                log_handle = log_path.open("ab", buffering=0)
-                creationflags = 0
-                if os.name == "nt":
-                    creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                    creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-
-                # Publish "starting" BEFORE entering Popen. If this parent
-                # crashes before writing the child's PID, later starts
-                # fail closed instead of presuming no child was spawned.
-                if slot_lease:
-                    launch_id = publish_starting(
-                        spec.exclusive_group, self._slot_dir, engine_id,
-                    )
-                process = subprocess.Popen(
-                    managed_command(spec.command(), spec.exclusive_group),
-                    cwd=str(spec.cwd),
-                    env=self._environment(spec),
-                    stdin=subprocess.DEVNULL,
-                    stdout=log_handle,
-                    stderr=subprocess.STDOUT,
-                    creationflags=creationflags,
-                    **spawn_options(spec.exclusive_group),
-                )
-                if slot_lease:
-                    publish_running(
-                        spec.exclusive_group, self._slot_dir, launch_id, process.pid,
-                    )
-            except BaseException as exc:
-                # If a child was created but its identity could not be
-                # published, kill and reap it before clearing its receipt.
-                reaped = process is None
-                if process is not None:
-                    try:
-                        stop_managed_tree(
-                            process, spec.exclusive_group, spec.shutdown_timeout,
-                        )
-                        reaped = True
-                    except (OSError, subprocess.TimeoutExpired, ProcessTreeUncertain):
-                        reaped = False
-                if log_handle:
-                    log_handle.close()
-                if slot_lease:
-                    try:
-                        # Popen errors before a returned handle are ambiguous:
-                        # keep the "starting" intent for manual reconciliation.
-                        if launch_id and process is not None and reaped:
-                            clear_launch_receipt(
-                                spec.exclusive_group, self._slot_dir, launch_id,
-                            )
-                    finally:
-                        slot_lease.release()
-                if isinstance(exc, UncertainRuntimeOwner):
-                    raise RuntimeConflictError(str(exc)) from exc
-                if isinstance(exc, Exception) and not isinstance(exc, RuntimeConflictError):
-                    self._record_failure(engine_id, "spawn-failed")
-                    if isinstance(exc, OSError):
-                        raise RuntimeSupervisorError(
-                            f"{engine_id}: unable to spawn managed runtime: {exc}"
-                        ) from exc
-                raise
-
-            self._owned[engine_id] = _OwnedProcess(
-                process=process,
-                log_path=log_path,
-                log_handle=log_handle,
-                started_at=time.time(),
-                slot_lease=slot_lease,
-                launch_id=launch_id,
-            )
-
-            deadline = time.monotonic() + spec.startup_timeout
-            last_error = None
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    tail = self._log_tail(log_path)
-                    self._clean_exited(engine_id)
-                    message = (
-                        f"{engine_id} exited during startup with code {process.returncode}"
-                    )
-                    if tail:
-                        message += f": {tail}"
-                    raise RuntimeSupervisorError(message)
-
-                ready, last_error = self._health(spec)
+            with self._guard_group(spec):
+                # Reap a dead managed process before selecting health timeout:
+                # during restart backoff, do not spend multiple seconds waiting
+                # for a known-offline health endpoint on every client request.
+                self._clean_exited(engine_id)
+                remaining = self._restart_cooldown(engine_id) if spec.managed else 0.0
+                ready, _ = self._health(spec, timeout=0.2 if remaining > 0 else 1.5)
                 if ready:
                     return self.status(engine_id)
-                time.sleep(0.5)
+                if not spec.managed:
+                    raise RuntimeSupervisorError(
+                        f"{engine_id} is external-only and is not currently healthy"
+                    )
 
-            tail = self._log_tail(log_path)
-            self._stop_owned(engine_id, spec)
-            self._record_failure(engine_id, "startup-timeout")
-            message = f"{engine_id} did not become healthy within {spec.startup_timeout:.0f}s"
-            if last_error:
-                message += f": {last_error}"
-            if tail:
-                message += f" | log: {tail}"
-            raise RuntimeSupervisorError(message)
+                owned = self._owned.get(engine_id)
+                if owned and owned.tree_uncertain:
+                    raise RuntimeConflictError(
+                        f"{engine_id}: previous managed process tree unresolved: "
+                        f"{owned.tree_uncertain}; stop or investigate before retry"
+                    )
+                if owned and owned.process.poll() is None:
+                    return self.status(engine_id)
+
+                if remaining > 0:
+                    raise RuntimeSupervisorError(
+                        f"{engine_id}: restart backoff active for {remaining:.1f}s "
+                        "after a failed runtime attempt; retry later or use explicit admin restart"
+                    )
+
+                if spec.executable is None or not spec.executable.is_file():
+                    raise RuntimeSupervisorError(
+                        f"{engine_id}: executable does not exist: {spec.executable}"
+                    )
+                if spec.cwd is None or not spec.cwd.is_dir():
+                    raise RuntimeSupervisorError(
+                        f"{engine_id}: cwd does not exist: {spec.cwd}"
+                    )
+
+                self._enforce_exclusive_group(spec, registry)
+
+                # Cooperative lock first, then reconcile a durable receipt
+                # left by any previous parent that may have died.
+                slot_lease = None
+                if spec.exclusive_group:
+                    slot_lease = acquire_runtime_slot(spec.exclusive_group, self._slot_dir)
+                    if slot_lease is None:
+                        raise RuntimeConflictError(
+                            f"{engine_id}: exclusive runtime group {spec.exclusive_group} "
+                            "is held by another CVS process; do not start a second GPU engine"
+                        )
+                process = None
+                log_handle = None
+                launch_id = None
+                try:
+                    if slot_lease:
+                        try:
+                            reconcile_prior_owner(spec.exclusive_group, self._slot_dir)
+                        except UncertainRuntimeOwner as exc:
+                            raise RuntimeConflictError(str(exc)) from exc
+
+                    self._log_dir.mkdir(parents=True, exist_ok=True)
+                    log_path = self._log_dir / f"{engine_id}.log"
+                    log_handle = log_path.open("ab", buffering=0)
+                    creationflags = 0
+                    if os.name == "nt":
+                        creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                        creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+                    # Publish "starting" BEFORE entering Popen. If this parent
+                    # crashes before writing the child's PID, later starts
+                    # fail closed instead of presuming no child was spawned.
+                    if slot_lease:
+                        launch_id = publish_starting(
+                            spec.exclusive_group, self._slot_dir, engine_id,
+                        )
+                    process = subprocess.Popen(
+                        managed_command(spec.command(), spec.exclusive_group),
+                        cwd=str(spec.cwd),
+                        env=self._environment(spec),
+                        stdin=subprocess.DEVNULL,
+                        stdout=log_handle,
+                        stderr=subprocess.STDOUT,
+                        creationflags=creationflags,
+                        **spawn_options(spec.exclusive_group),
+                    )
+                    if slot_lease:
+                        publish_running(
+                            spec.exclusive_group, self._slot_dir, launch_id, process.pid,
+                        )
+                except BaseException as exc:
+                    # If a child was created but its identity could not be
+                    # published, kill and reap it before clearing its receipt.
+                    reaped = process is None
+                    if process is not None:
+                        try:
+                            stop_managed_tree(
+                                process, spec.exclusive_group, spec.shutdown_timeout,
+                            )
+                            reaped = True
+                        except (OSError, subprocess.TimeoutExpired, ProcessTreeUncertain):
+                            reaped = False
+                    if log_handle:
+                        log_handle.close()
+                    if slot_lease:
+                        try:
+                            # Popen errors before a returned handle are ambiguous:
+                            # keep the "starting" intent for manual reconciliation.
+                            if launch_id and process is not None and reaped:
+                                clear_launch_receipt(
+                                    spec.exclusive_group, self._slot_dir, launch_id,
+                                )
+                        finally:
+                            slot_lease.release()
+                    if isinstance(exc, UncertainRuntimeOwner):
+                        raise RuntimeConflictError(str(exc)) from exc
+                    if isinstance(exc, Exception) and not isinstance(exc, RuntimeConflictError):
+                        self._record_failure(engine_id, "spawn-failed")
+                        if isinstance(exc, OSError):
+                            raise RuntimeSupervisorError(
+                                f"{engine_id}: unable to spawn managed runtime: {exc}"
+                            ) from exc
+                    raise
+
+                self._owned[engine_id] = _OwnedProcess(
+                    process=process,
+                    log_path=log_path,
+                    log_handle=log_handle,
+                    started_at=time.time(),
+                    slot_lease=slot_lease,
+                    launch_id=launch_id,
+                )
+
+                deadline = time.monotonic() + spec.startup_timeout
+                last_error = None
+                while time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        tail = self._log_tail(log_path)
+                        self._clean_exited(engine_id)
+                        message = (
+                            f"{engine_id} exited during startup with code {process.returncode}"
+                        )
+                        if tail:
+                            message += f": {tail}"
+                        raise RuntimeSupervisorError(message)
+
+                    ready, last_error = self._health(spec)
+                    if ready:
+                        return self.status(engine_id)
+                    time.sleep(0.5)
+
+                tail = self._log_tail(log_path)
+                self._stop_owned(engine_id, spec)
+                self._record_failure(engine_id, "startup-timeout")
+                message = f"{engine_id} did not become healthy within {spec.startup_timeout:.0f}s"
+                if last_error:
+                    message += f": {last_error}"
+                if tail:
+                    message += f" | log: {tail}"
+                raise RuntimeSupervisorError(message)
 
     def restart(self, engine_id: str) -> dict:
         with self._lock:
             spec = self.registry().get(engine_id)
             if spec is None:
                 raise RuntimeSupervisorError(f"runtime is not configured: {engine_id}")
-            self._stop_owned(engine_id, spec)
-            ready, _ = self._health(spec)
-            if ready:
-                raise RuntimeSupervisorError(
-                    f"{engine_id} is still healthy after stopping supervisor-owned process; "
-                    "another external process may own the endpoint"
-                )
-            # Explicit admin restart is the escape hatch from auto-start
-            # backoff. Do not clear a recorded exit code or diagnostic log.
-            self._failures.pop(engine_id, None)
-            return self.start(engine_id)
+            with self._guard_group(spec):
+                self._stop_owned(engine_id, spec)
+                ready, _ = self._health(spec)
+                if ready:
+                    raise RuntimeSupervisorError(
+                        f"{engine_id} is still healthy after stopping supervisor-owned process; "
+                        "another external process may own the endpoint"
+                    )
+                # Explicit admin restart is the escape hatch from auto-start
+                # backoff. Do not clear a recorded exit code or diagnostic log.
+                self._failures.pop(engine_id, None)
+                return self.start(engine_id)
 
     def _request_external_activation(self, spec: RuntimeSpec) -> dict:
         control = spec.external_control or {}
@@ -867,7 +896,8 @@ class RuntimeSupervisor:
                         shutdown_timeout=5,
                     )
                 try:
-                    self._stop_owned(engine_id, spec)
+                    with self._guard_group(spec):
+                        self._stop_owned(engine_id, spec)
                 except Exception:
                     pass
 

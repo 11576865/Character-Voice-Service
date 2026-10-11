@@ -111,3 +111,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## GPT-SoVITS 推理事务一致性
 
 [GPT-SoVITS serving transaction v1](docs/gpt-sovits-serving-transaction-v1.md)：同一后端的协作 CVS 实例以跨进程文件锁完整保护模型权重切换与推理；每次托管模型合成都重新确认两套权重，避免后端重启后复用旧进程缓存。推理期间 CVS 异常终止会保留待确认记录，拒绝未经核查的再次切换。当前冲突返回可重试 HTTP 503，而非隐式并发生成。真实 GPT-SoVITS/GPU、非协作客户端、GPU 组切换时正在运行的推理及可解码 WAV 验收仍须单独核查。
+
+## 推理中的 GPU 组生命周期保护
+
+[GPU group in-flight lifecycle guard v1](docs/runtime-gpu-group-inflight-guard-v1.md) 将同组引擎的**推理进入**与**启动、停止、重启及自动切换**放在同一跨进程活动锁下。若旧引擎仍有推理正在进行，同组新引擎的生命周期操作会明确拒绝，而不是中途终止旧引擎。CVS 异常退出时，持久化推理记录阻止盲目接管，直到运维人员根据后端实际状态确认恢复。该机制要求各 CVS 实例共享 Runtime Registry 中的 `exclusive_group` 及同一数据目录；不代表真实 GPU、非协作进程或音频有效性已经验收。
