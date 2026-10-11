@@ -4,6 +4,9 @@ All tests use a mocked external engine and local request directory. They
 never start user TTS model processes or claim System Supervisor support.
 """
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -305,3 +308,49 @@ def test_corrupt_activation_receipt_remains_visible_to_admin(tmp_path, monkeypat
     assert state["status"] == "external-activation-unresolved"
     assert state["external_activation"]["state"] == "unreadable"
     assert len(_commands(root)) == 1
+
+
+def test_other_python_process_holding_service_activation_lease_blocks_command(tmp_path, monkeypatch):
+    sup, spec, root = _external(tmp_path)
+    marker, release = tmp_path / "held", tmp_path / "release"
+    child_source = """
+import sys, time
+from pathlib import Path
+from server.runtime_external_activation import acquire_activation_lease
+root, marker, release = sys.argv[1:]
+lease = acquire_activation_lease(root, "IndexTTS")
+assert lease is not None
+Path(marker).write_text("locked", encoding="utf-8")
+try:
+    while not Path(release).exists():
+        time.sleep(0.03)
+finally:
+    lease.release()
+"""
+    repo_root = str(Path(__file__).resolve().parents[1])
+    env = os.environ.copy()
+    env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
+    child = subprocess.Popen(
+        [sys.executable, "-c", child_source, str(root), str(marker), str(release)],
+        cwd=repo_root, env=env,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    monkeypatch.setattr(sup, "_health", lambda spec, timeout=1.5: (False, "offline"))
+    try:
+        deadline = time.monotonic() + 10
+        while not marker.exists() and child.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.025)
+        assert marker.exists() and child.poll() is None
+        with pytest.raises(RuntimeConflictError, match="already in progress"):
+            sup._request_external_activation(spec)
+        assert _commands(root) == []
+        assert pending_activation(root, "IndexTTS") is None
+    finally:
+        release.touch()
+        try:
+            child.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=5)
+            raise
+    assert child.returncode == 0
