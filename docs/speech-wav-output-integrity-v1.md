@@ -2,34 +2,34 @@
 
 ## Source audit and previous failure
 
-CVS's public \`POST /v1/audio/speech\` promises an \`audio/wav\`
-response. Before this change, \`server/backends/gpt_sovits.py\` returned
+CVS's public `POST /v1/audio/speech` promises an `audio/wav`
+response. Before this change, `server/backends/gpt_sovits.py` returned
 arbitrary HTTP 200 response bytes without decoding them, and
-\`server/engines/index_tts.py\` / \`sidecar.py\` checked only that the
-Content-Type contained \`audio/\` and the body was nonempty. The
-public endpoint then labeled any returned bytes \`audio/wav\` and,
-when enabled, saved them under a \`.wav\` filename.
+`server/engines/index_tts.py` / `sidecar.py` checked only that the
+Content-Type contained `audio/` and the body was nonempty. The
+public endpoint then labeled any returned bytes `audio/wav` and,
+when enabled, saved them under a `.wav` filename.
 
-Tests previously used \`b"wav-data"\` or \`b"RIFF....WAVE"\` as
+Tests previously used `b"wav-data"` or `b"RIFF....WAVE"` as
 successful generated output: neither is a complete PCM WAV.
 
-A 200 status or an \`audio/\` header cannot establish valid audio.
+A 200 status or an `audio/` header cannot establish valid audio.
 This is a source-level contract gap, not evidence of a particular
 production model delivering malformed bytes.
 
 ## New acceptance boundary
 
-\`server/audio_validation.py\` is the shared pure-Python validator:
+`server/audio_validation.py` is the shared pure-Python validator:
 
 - The entire response must be a canonical little-endian
-  \`RIFF/WAVE\` container with an exact RIFF byte count and valid
+  `RIFF/WAVE` container with an exact RIFF byte count and valid
   non-overlapping chunk boundaries and padding.
-- Exactly one \`fmt \` chunk must precede exactly one \`data\` chunk.
+- Exactly one `fmt ` chunk must precede exactly one `data` chunk.
   Extra metadata chunks are permitted as long as their declared
   lengths and padding are consistent.
 - The selected format must be integer PCM (8/16/24/32-bit) or IEEE
   float (32/64-bit), either directly or inside the standard
-  \`WAVE_FORMAT_EXTENSIBLE\` format with the correct GUID.
+  `WAVE_FORMAT_EXTENSIBLE` format with the correct GUID.
   Compressed WAV codecs, unrecognized extensions, RF64 and arbitrary
   HTML/JSON error bodies are rejected as outside this contract.
 - Audio must have 1–8 channels, 8–192 kHz sample rate, consistent
@@ -69,18 +69,18 @@ mandatory audio acceptance boundaries.
 
 ## Regression coverage
 
-- \`tests/wav_fixtures.py\` creates real PCM WAV bytes with the
-  standard-library \`wave\` writer.
-- \`tests/test_audio_validation.py\` checks real PCM decoding, float
+- `tests/wav_fixtures.py` creates real PCM WAV bytes with the
+  standard-library `wave` writer.
+- `tests/test_audio_validation.py` checks real PCM decoding, float
   and extensible WAV framing, legal padded metadata, wrong RIFF
   length, truncated chunks, empty/partial frames, unsupported
   codecs, duration limits and bounded reads, plus all three engine
   identity routes through the shared dispatcher.
-- \`tests/test_contract.py\` verifies a real PCM payload is returned
+- `tests/test_contract.py` verifies a real PCM payload is returned
   with success metadata and that invalid WAV/JSON bodies cannot be
-  saved or returned as successful \`audio/wav\`.
-- Previously fake successful audio in \`tests/test_gpt_sovits.py\`,
-  \`tests/test_index_tts.py\` and the managed-runtime activity tests
+  saved or returned as successful `audio/wav`.
+- Previously fake successful audio in `tests/test_gpt_sovits.py`,
+  `tests/test_index_tts.py` and the managed-runtime activity tests
   is replaced with real PCM WAV test fixtures.
 - Linux full pytest and Windows targeted CI run the validation tests.
 
