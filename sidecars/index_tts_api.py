@@ -71,19 +71,28 @@ def _terminate_stalled_inference(request_id: str, deadline: float) -> None:
     """A stuck native/GPU infer call cannot be safely cancelled in-process."""
     # Ignore late timer callbacks after the tracked inference has already
     # returned, or after a different request becomes the active owner.
+    # threading.Timer can wake slightly before a monotonic deadline,
+    # particularly on Windows. An early return here would permanently
+    # disarm the only watchdog while native inference is still hung.
+    # Wait out the remaining fraction and re-check the active request ID.
     with _STATE_LOCK:
         active = _ACTIVE_INFERENCE
         if not active or active["request_id"] != request_id:
             return
-        if time.monotonic() - active["started"] < deadline:
+        remaining = deadline - (time.monotonic() - active["started"])
+    if remaining > 0:
+        time.sleep(remaining)
+    with _STATE_LOCK:
+        active = _ACTIVE_INFERENCE
+        if not active or active["request_id"] != request_id:
             return
         print(
             f"IndexTTS inference watchdog exceeded {deadline:g}s; "
             f"aborting sidecar process, request_id={request_id}",
             flush=True,
         )
-        # Force-stop only this engine's dedicated process; Python threads
-        # cannot safely interrupt a hung native/GPU inference stack.
+        # The sidecar owns one inference process; do not pretend native/GPU
+        # calls support safe in-process cancellation.
         os._exit(124)
 
 
