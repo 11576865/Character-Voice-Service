@@ -150,7 +150,7 @@ def test_process_exiting_after_successful_start_is_recorded_once(tmp_path):
         'import threading, time, sys\n'
         'server = HTTPServer(("127.0.0.1", int(os.environ["TEST_PORT"])), Handler)\n'
         'threading.Thread(target=server.serve_forever, daemon=True).start()\n'
-        'time.sleep(1.0)\n'
+        'time.sleep(2.0)\n'
         'sys.exit(19)'
     )
     supervisor, script, attempts = _runtime(tmp_path, source)
@@ -169,6 +169,29 @@ def test_process_exiting_after_successful_start_is_recorded_once(tmp_path):
         assert result["restart_failures"] == 1
         again = supervisor.status("test-engine")
         assert again["restart_failures"] == 1
+        assert attempts.read_text(encoding="utf-8").splitlines() == ["start"]
+    finally:
+        supervisor.shutdown_all()
+
+
+def test_startup_timeout_creates_backoff_without_falsely_claiming_unexpected_exit(tmp_path):
+    supervisor, script, attempts = _runtime(tmp_path, """
+import os, time
+from pathlib import Path
+with Path(os.environ["TEST_ATTEMPTS"]).open("a", encoding="utf-8") as log:
+    log.write("start\\n")
+time.sleep(15)
+""")
+    try:
+        with pytest.raises(RuntimeSupervisorError, match="did not become healthy"):
+            supervisor.start("test-engine")
+        state = supervisor.status("test-engine")
+        assert state["status"] == "restart-backoff"
+        assert state["last_start_failure"] == "startup-timeout"
+        assert state["restart_failures"] == 1
+        assert state["last_exit"] is None
+        with pytest.raises(RuntimeSupervisorError, match="restart backoff active"):
+            supervisor.ensure_ready("test-engine")
         assert attempts.read_text(encoding="utf-8").splitlines() == ["start"]
     finally:
         supervisor.shutdown_all()
