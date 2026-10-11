@@ -14,6 +14,7 @@ from typing import BinaryIO
 
 from server.config import DATA_DIR
 from server.runtime_registry import RuntimeRegistry, RuntimeSpec, load_runtime_registry
+from server.runtime_slot_lease import RuntimeSlotLease, acquire_runtime_slot
 
 
 class RuntimeSupervisorError(RuntimeError):
@@ -30,6 +31,7 @@ class _OwnedProcess:
     log_path: Path
     log_handle: BinaryIO
     started_at: float
+    slot_lease: RuntimeSlotLease | None = None
 
 
 class RuntimeSupervisor:
@@ -38,9 +40,11 @@ class RuntimeSupervisor:
         *,
         registry_path: str | Path | None = None,
         log_dir: str | Path | None = None,
+        slot_dir: str | Path | None = None,
     ):
         self._registry_path = registry_path
         self._log_dir = Path(log_dir) if log_dir else DATA_DIR / "runtime-logs"
+        self._slot_dir = Path(slot_dir) if slot_dir else DATA_DIR / "runtime-slots"
         self._owned: dict[str, _OwnedProcess] = {}
         self._lock = threading.RLock()
 
@@ -188,6 +192,8 @@ class RuntimeSupervisor:
             owned.log_handle.close()
         finally:
             self._owned.pop(engine_id, None)
+            if owned.slot_lease:
+                owned.slot_lease.release()
 
     def _log_tail(self, path: Path, limit: int = 4000) -> str:
         try:
@@ -316,6 +322,8 @@ class RuntimeSupervisor:
             owned.log_handle.close()
         finally:
             self._owned.pop(engine_id, None)
+            if owned.slot_lease:
+                owned.slot_lease.release()
 
         return self.status(engine_id)
 
@@ -383,16 +391,28 @@ class RuntimeSupervisor:
 
             self._enforce_exclusive_group(spec, registry)
 
-            self._log_dir.mkdir(parents=True, exist_ok=True)
-            log_path = self._log_dir / f"{engine_id}.log"
-            log_handle = log_path.open("ab", buffering=0)
+            # Keep this OS lease until the managed child has actually exited.
+            # The in-process RLock does not serialize separate CVS servers.
+            slot_lease = None
+            if spec.exclusive_group:
+                slot_lease = acquire_runtime_slot(spec.exclusive_group, self._slot_dir)
+                if slot_lease is None:
+                    raise RuntimeConflictError(
+                        f"{engine_id}: exclusive runtime group {spec.exclusive_group} "
+                        "is held by another CVS process; do not start a second GPU engine"
+                    )
 
-            creationflags = 0
-            if os.name == "nt":
-                creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-
+            log_handle = None
             try:
+                self._log_dir.mkdir(parents=True, exist_ok=True)
+                log_path = self._log_dir / f"{engine_id}.log"
+                log_handle = log_path.open("ab", buffering=0)
+
+                creationflags = 0
+                if os.name == "nt":
+                    creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
                 process = subprocess.Popen(
                     spec.command(),
                     cwd=str(spec.cwd),
@@ -402,8 +422,11 @@ class RuntimeSupervisor:
                     stderr=subprocess.STDOUT,
                     creationflags=creationflags,
                 )
-            except Exception:
-                log_handle.close()
+            except BaseException:
+                if log_handle:
+                    log_handle.close()
+                if slot_lease:
+                    slot_lease.release()
                 raise
 
             self._owned[engine_id] = _OwnedProcess(
@@ -411,6 +434,7 @@ class RuntimeSupervisor:
                 log_path=log_path,
                 log_handle=log_handle,
                 started_at=time.time(),
+                slot_lease=slot_lease,
             )
 
             deadline = time.monotonic() + spec.startup_timeout
