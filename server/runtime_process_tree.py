@@ -44,18 +44,32 @@ def _live_posix_group_members(pgid: int) -> bool | None:
         return None
     proc = Path("/proc")
     if proc.is_dir() and sys.platform.startswith("linux"):
-        for entry in proc.iterdir():
-            if not entry.name.isdecimal():
-                continue
-            try:
-                stats = (entry / "stat").read_text(encoding="ascii")
-                fields = stats.rsplit(")", 1)[1].split()
-                state, pgrp, session = fields[0], int(fields[2]), int(fields[3])
-            except (OSError, IndexError, ValueError):
-                continue  # Transient /proc entries can disappear mid-scan.
-            if pgrp == pgid and session == pgid and state not in {"Z", "X", "x"}:
-                return True
-        return False
+        # A hidden or inaccessible /proc entry might belong to this
+        # group. Ignoring PermissionError would claim the group is empty
+        # and could release an active GPU lease after a privilege change.
+        unreadable = False
+        try:
+            entries = proc.iterdir()
+            for entry in entries:
+                if not entry.name.isdecimal():
+                    continue
+                try:
+                    stats = (entry / "stat").read_text(encoding="ascii")
+                    fields = stats.rsplit(")", 1)[1].split()
+                    state, pgrp, session = fields[0], int(fields[2]), int(fields[3])
+                except (PermissionError, IsADirectoryError):
+                    unreadable = True
+                    continue
+                except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
+                    continue  # Process disappeared while listing /proc.
+                except OSError:
+                    unreadable = True
+                    continue
+                if pgrp == pgid and session == pgid and state not in {"Z", "X", "x"}:
+                    return True
+        except OSError:
+            return None
+        return None if unreadable else False
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
