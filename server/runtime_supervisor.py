@@ -25,6 +25,13 @@ class RuntimeConflictError(RuntimeSupervisorError):
     pass
 
 
+# Backoff is in-memory and scoped to this supervisor process. A process
+# restart intentionally clears it; crash history is exported in diagnostics.
+CRASH_BACKOFF_BASE_SECONDS = 5.0
+CRASH_BACKOFF_MAX_SECONDS = 60.0
+CRASH_HISTORY_WINDOW_SECONDS = 300.0
+
+
 @dataclass
 class _OwnedProcess:
     process: subprocess.Popen
@@ -46,6 +53,8 @@ class RuntimeSupervisor:
         self._log_dir = Path(log_dir) if log_dir else DATA_DIR / "runtime-logs"
         self._slot_dir = Path(slot_dir) if slot_dir else DATA_DIR / "runtime-slots"
         self._owned: dict[str, _OwnedProcess] = {}
+        self._failures: dict[str, dict] = {}
+        self._last_exit: dict[str, dict] = {}
         self._lock = threading.RLock()
 
     def registry(self) -> RuntimeRegistry:
@@ -182,12 +191,52 @@ class RuntimeSupervisor:
             }
         return None
 
+    def _record_failure(self, engine_id: str, reason: str) -> dict:
+        """Record one failed lifecycle attempt and bound the next auto-start."""
+        now = time.monotonic()
+        previous = self._failures.get(engine_id)
+        count = (
+            previous["count"] + 1
+            if previous and now - previous["last_failure_monotonic"] < CRASH_HISTORY_WINDOW_SECONDS
+            else 1
+        )
+        delay = min(CRASH_BACKOFF_MAX_SECONDS, CRASH_BACKOFF_BASE_SECONDS * (2 ** min(count - 1, 12)))
+        record = {
+            "count": count,
+            "reason": reason,
+            "last_failure_monotonic": now,
+            "next_retry_monotonic": now + delay,
+        }
+        self._failures[engine_id] = record
+        return record
+
+    def _restart_cooldown(self, engine_id: str) -> float:
+        record = self._failures.get(engine_id)
+        if not record:
+            return 0.0
+        return max(0.0, record["next_retry_monotonic"] - time.monotonic())
+
     def _clean_exited(self, engine_id: str) -> None:
         owned = self._owned.get(engine_id)
         if not owned:
             return
-        if owned.process.poll() is None:
+        code = owned.process.poll()
+        if code is None:
             return
+        uptime = max(0.0, time.time() - owned.started_at)
+        # A stable process that ran for a full history window starts a new
+        # failure sequence; do not accumulate penalties across healthy hours.
+        if uptime >= CRASH_HISTORY_WINDOW_SECONDS:
+            self._failures.pop(engine_id, None)
+        self._last_exit[engine_id] = {
+            "pid": owned.process.pid,
+            "returncode": code,
+            "uptime_seconds": round(uptime, 2),
+            "observed_unix": time.time(),
+            "log_path": str(owned.log_path),
+            "reason": "unexpected-exit",
+        }
+        self._record_failure(engine_id, "unexpected-exit")
         try:
             owned.log_handle.close()
         finally:
@@ -256,6 +305,13 @@ class RuntimeSupervisor:
             else:
                 state = "stopped"
 
+            # Last exit and restart cooldown are diagnostic evidence, not
+            # proof an old model is still running. Never suppress a healthy
+            # externally owned service merely because the managed copy died.
+            cooldown = self._restart_cooldown(engine_id) if spec.managed else 0.0
+            if spec.managed and state == "stopped" and cooldown > 0:
+                state = "restart-backoff"
+
             external = self._external_supervisor_status(spec) if not spec.managed else None
             external_pid = external.get("pid") if external else None
             external_state = str(external.get("supervisor_state") or "") if external else ""
@@ -284,6 +340,10 @@ class RuntimeSupervisor:
                 "start_on_demand": spec.start_on_demand,
                 "health_error": health_error if not ready else None,
                 "log_path": str(owned.log_path) if owned else None,
+                "last_exit": dict(self._last_exit[engine_id]) if engine_id in self._last_exit else None,
+                "restart_failures": self._failures.get(engine_id, {}).get("count", 0),
+                "restart_backoff_seconds": round(cooldown, 2),
+                "last_start_failure": self._failures.get(engine_id, {}).get("reason"),
             }
 
         finally:
@@ -367,7 +427,12 @@ class RuntimeSupervisor:
             if not spec.enabled:
                 raise RuntimeSupervisorError(f"runtime is disabled: {engine_id}")
 
-            ready, _ = self._health(spec)
+            # Reap a dead managed process before selecting health timeout:
+            # during restart backoff, do not spend multiple seconds waiting
+            # for a known-offline health endpoint on every client request.
+            self._clean_exited(engine_id)
+            remaining = self._restart_cooldown(engine_id) if spec.managed else 0.0
+            ready, _ = self._health(spec, timeout=0.2 if remaining > 0 else 1.5)
             if ready:
                 return self.status(engine_id)
             if not spec.managed:
@@ -375,10 +440,15 @@ class RuntimeSupervisor:
                     f"{engine_id} is external-only and is not currently healthy"
                 )
 
-            self._clean_exited(engine_id)
             owned = self._owned.get(engine_id)
             if owned and owned.process.poll() is None:
                 return self.status(engine_id)
+
+            if remaining > 0:
+                raise RuntimeSupervisorError(
+                    f"{engine_id}: restart backoff active for {remaining:.1f}s "
+                    "after a failed runtime attempt; retry later or use explicit admin restart"
+                )
 
             if spec.executable is None or not spec.executable.is_file():
                 raise RuntimeSupervisorError(
@@ -391,8 +461,8 @@ class RuntimeSupervisor:
 
             self._enforce_exclusive_group(spec, registry)
 
-            # Keep this OS lease until the managed child has actually exited.
-            # The in-process RLock does not serialize separate CVS servers.
+            # A live engine must own the OS lease for its entire observed
+            # lifetime; the supervisor RLock alone is not cross-process.
             slot_lease = None
             if spec.exclusive_group:
                 slot_lease = acquire_runtime_slot(spec.exclusive_group, self._slot_dir)
@@ -407,12 +477,10 @@ class RuntimeSupervisor:
                 self._log_dir.mkdir(parents=True, exist_ok=True)
                 log_path = self._log_dir / f"{engine_id}.log"
                 log_handle = log_path.open("ab", buffering=0)
-
                 creationflags = 0
                 if os.name == "nt":
                     creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
                     creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-
                 process = subprocess.Popen(
                     spec.command(),
                     cwd=str(spec.cwd),
@@ -422,11 +490,17 @@ class RuntimeSupervisor:
                     stderr=subprocess.STDOUT,
                     creationflags=creationflags,
                 )
-            except BaseException:
+            except BaseException as exc:
                 if log_handle:
                     log_handle.close()
                 if slot_lease:
                     slot_lease.release()
+                if isinstance(exc, Exception):
+                    self._record_failure(engine_id, "spawn-failed")
+                    if isinstance(exc, OSError):
+                        raise RuntimeSupervisorError(
+                            f"{engine_id}: unable to spawn managed runtime: {exc}"
+                        ) from exc
                 raise
 
             self._owned[engine_id] = _OwnedProcess(
@@ -457,6 +531,7 @@ class RuntimeSupervisor:
 
             tail = self._log_tail(log_path)
             self._stop_owned(engine_id, spec)
+            self._record_failure(engine_id, "startup-timeout")
             message = f"{engine_id} did not become healthy within {spec.startup_timeout:.0f}s"
             if last_error:
                 message += f": {last_error}"
@@ -476,6 +551,9 @@ class RuntimeSupervisor:
                     f"{engine_id} is still healthy after stopping supervisor-owned process; "
                     "another external process may own the endpoint"
                 )
+            # Explicit admin restart is the escape hatch from auto-start
+            # backoff. Do not clear a recorded exit code or diagnostic log.
+            self._failures.pop(engine_id, None)
             return self.start(engine_id)
 
     def _request_external_activation(self, spec: RuntimeSpec) -> dict:
@@ -532,6 +610,11 @@ class RuntimeSupervisor:
             # Backward compatibility: an unregistered engine may still be managed
             # manually, exactly as before Runtime Registry was introduced.
             return None
+
+        # Keep cooldown requests on the short health-probe path in start()
+        # rather than accumulating the default 1.5s wait per request here.
+        if spec.managed and spec.start_on_demand and self._restart_cooldown(engine_id) > 0:
+            return self.start(engine_id)
 
         ready, _ = self._health(spec)
         if ready:

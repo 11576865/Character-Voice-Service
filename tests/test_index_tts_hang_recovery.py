@@ -132,6 +132,44 @@ api.infer_with_watchdog(Stalled(), {}, request_id="timeout-fixture", deadline=0.
     assert "timeout-fixture" in output
 
 
+def test_watchdog_early_timer_callback_must_wait_until_deadline_in_child():
+    # The original watchdog returned permanently if Timer woke before the
+    # monotonic deadline. Force that scheduler ordering in an isolated
+    # process so the test itself cannot be terminated by os._exit(124).
+    source = """
+import threading
+import time
+from sidecars import index_tts_api as api
+
+class EagerTimer:
+    def __init__(self, seconds, callback, args=()):
+        self.callback, self.args = callback, args
+    def start(self):
+        threading.Thread(target=self.callback, args=self.args, daemon=True).start()
+    def cancel(self):
+        pass
+
+api.threading.Timer = EagerTimer
+class Stalled:
+    def infer(self, **kwargs):
+        time.sleep(10)
+
+print("eager-timer", flush=True)
+api.infer_with_watchdog(Stalled(), {}, request_id="early-callback", deadline=0.2)
+"""
+    with tempfile.TemporaryFile(mode="w+b") as log:
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            stdout=log, stderr=subprocess.STDOUT, timeout=8,
+        )
+        log.seek(0)
+        output = log.read().decode("utf-8", errors="replace")
+    assert result.returncode == 124, output
+    assert "eager-timer" in output
+    assert "early-callback" in output
+
+
 def test_inference_watchdog_does_not_kill_completed_child_process():
     source = """
 import time
