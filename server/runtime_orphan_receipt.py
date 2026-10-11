@@ -13,6 +13,8 @@ import time
 import uuid
 from pathlib import Path
 
+from server.runtime_process_tree import _live_posix_group_members
+
 class UncertainRuntimeOwner(RuntimeError):
     """A possible former child is still alive or cannot be disproved."""
 
@@ -148,6 +150,21 @@ def reconcile_prior_owner(group: str, directory: Path) -> None:
     pid, expected = record.get("pid"), record.get("process_identity")
     state, actual = process_identity(pid)
     if state == "dead" or (state == "alive" and expected and actual and expected != actual):
+        # Old receipts predate process-tree containment. A missing tree
+        # identity cannot prove the engine's GPU-owning descendants exited.
+        tree_kind = record.get("tree_kind")
+        if tree_kind == "posix-session" and os.name != "nt":
+            remaining = _live_posix_group_members(pid)
+            if remaining is not False:
+                raise UncertainRuntimeOwner(
+                    f"{group}: prior engine PID exited but POSIX session "
+                    f"{pid} still has or may have descendants"
+                )
+        elif tree_kind != "windows-job-wrapper" or os.name != "nt":
+            raise UncertainRuntimeOwner(
+                f"{group}: legacy or incompatible launch receipt has no "
+                "verifiable process-tree containment; inspect before clearing"
+            )
         path.unlink()
         return
     raise UncertainRuntimeOwner(
@@ -183,6 +200,7 @@ def publish_running(group: str, directory: Path, launch_id: str, pid: int) -> No
         "state": "running",
         "pid": pid,
         "process_identity": identity,
+        "tree_kind": "windows-job-wrapper" if os.name == "nt" else "posix-session",
         "confirmed_unix": time.time(),
     })
 
