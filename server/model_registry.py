@@ -1,8 +1,12 @@
+import errno
 import hashlib
 import json
 import os
 import re
 import shutil
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +68,9 @@ def _empty_registry() -> dict:
 
 
 def load_registry(path: Path = REGISTRY_PATH) -> dict:
+    # Canonicalize a configured alias so readers and writers refer to the
+    # same physical registry file rather than replacing a symlink itself.
+    path = Path(path).expanduser().resolve()
     if not path.is_file():
         return _empty_registry()
 
@@ -78,11 +85,79 @@ def load_registry(path: Path = REGISTRY_PATH) -> dict:
     return data
 
 
-def save_registry(data: dict, path: Path = REGISTRY_PATH) -> None:
+@contextmanager
+def _registry_write_lock(path: Path, *, timeout: float = 120.0):
+    """Advisory cross-process lock for the full registry read-modify-write.
+
+    Never delete the .lock file: unlinking/recreating the inode would allow
+    concurrent holders to believe they have mutually exclusive locks.
+    Linux/macOS use flock; Windows uses msvcrt byte-range locking.
+    """
+    if timeout < 0:
+        raise ValueError("registry lock timeout must not be negative")
+    path = Path(path).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-    staging = path.with_suffix(path.suffix + ".tmp")
-    staging.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    staging.replace(path)
+    lock_path = path.with_name(path.name + ".lock")
+    # Open before attempting a lock; close releases the OS lock even if an
+    # exception occurs. Never use an existence-test lockfile protocol.
+    with lock_path.open("a+b") as lock_file:
+        if os.name == "nt":
+            import msvcrt
+
+            lock_file.seek(0, 2)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            lock = lambda: msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            unlock = lambda: msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            lock = lambda: fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            unlock = lambda: fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                lock()
+                break
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, getattr(errno, "EDEADLK", errno.EAGAIN)}:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"timed out waiting for Model Registry lock: {lock_path}") from exc
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        try:
+            yield
+        finally:
+            unlock()
+
+
+def _save_registry_unlocked(data: dict, path: Path) -> None:
+    """Only call inside _registry_write_lock (or from save_registry)."""
+    path = Path(path).expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with staging.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(staging, path)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def save_registry(data: dict, path: Path = REGISTRY_PATH) -> None:
+    """Publish a complete registry snapshot under the same writer lock.
+
+    Do not use this API for stale read-modify-write snapshots; callers which
+    mutate registry state must hold one lock from load through publication.
+    """
+    with _registry_write_lock(path):
+        _save_registry_unlocked(data, path)
 
 
 def _relative_artifact_path(value: object, field: str) -> Path:
@@ -204,92 +279,119 @@ def scan_model_root(
     model_root: Path = MODEL_ROOT,
     registry_path: Path = REGISTRY_PATH,
 ) -> dict:
-    model_root = model_root.expanduser().resolve()
-    model_root.mkdir(parents=True, exist_ok=True)
-    registry = load_registry(registry_path)
+    # Include discovery itself in the same transaction: concurrent scans
+    # must not publish stale inventories in reverse scan-completion order.
+    with _registry_write_lock(registry_path):
+        model_root = model_root.expanduser().resolve()
+        model_root.mkdir(parents=True, exist_ok=True)
 
-    discovered: dict[str, dict] = {}
-    invalid: list[dict] = []
+        discovered: dict[str, dict] = {}
+        duplicate_ids: set[str] = set()
+        invalid: list[dict] = []
 
-    for manifest_path in sorted(model_root.rglob(MANIFEST_FILENAME)):
-        try:
-            model = validate_manifest(manifest_path)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            invalid.append({"manifest": str(manifest_path), "error": str(exc)})
-            continue
+        for manifest_path in sorted(model_root.rglob(MANIFEST_FILENAME)):
+            try:
+                # Resolve provenance path inside the guarded block: a model.json
+                # symlink can point outside Model Root even when rglob found it
+                # inside. It must be reported invalid, not abort the entire scan.
+                relative_manifest = _registry_relative(manifest_path, model_root)
+                model = validate_manifest(manifest_path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                invalid.append({"manifest": str(manifest_path), "error": str(exc)})
+                continue
 
-        model_id = model["model_id"]
-        relative_manifest = _registry_relative(manifest_path, model_root)
-        previous = discovered.get(model_id)
+            model_id = model["model_id"]
+            if model_id in duplicate_ids:
+                invalid.append({
+                    "manifest": relative_manifest,
+                    "error": f"duplicate model_id: {model_id}",
+                })
+                continue
 
-        if previous and previous["manifest_sha256"] != model["manifest_sha256"]:
-            invalid.append({
+            if model_id in discovered:
+                # Two copies of an identical manifest are still ambiguous:
+                # changing scan order must not change the Model Root locator.
+                duplicate_ids.add(model_id)
+                discovered.pop(model_id)
+                invalid.append({
+                    "manifest": relative_manifest,
+                    "error": f"duplicate model_id across directories: {model_id}",
+                })
+                continue
+
+            discovered[model_id] = {
+                "scope": model["scope"],
+                "voice_id": model["voice_id"],
+                "engine": model["engine"]["name"],
+                "engine_version": model["engine"]["engine_version"],
                 "manifest": relative_manifest,
-                "error": f"duplicate model_id with different manifest: {model_id}",
-            })
-            continue
+                "manifest_sha256": model["manifest_sha256"],
+                "revision": model["revision"],
+                "initial_status": model["initial_status"],
+            }
 
-        discovered[model_id] = {
-            "scope": model["scope"],
-            "voice_id": model["voice_id"],
-            "engine": model["engine"]["name"],
-            "engine_version": model["engine"]["engine_version"],
-            "manifest": relative_manifest,
-            "manifest_sha256": model["manifest_sha256"],
-            "revision": model["revision"],
-            "initial_status": model["initial_status"],
-        }
+        registry = load_registry(registry_path)
+        now = _now_iso()
+        for model_id, item in discovered.items():
+            existing = registry["models"].get(model_id)
+            if existing and existing.get("manifest_sha256") not in {None, item["manifest_sha256"]}:
+                existing["status"] = "quarantined"
+                existing["present"] = True
+                existing["updated_at"] = now
+                existing["integrity_error"] = "immutable manifest changed after registration"
+                invalid.append({
+                    "manifest": item["manifest"],
+                    "error": f"immutable manifest changed after registration: {model_id}",
+                })
+                continue
 
-    now = _now_iso()
-    for model_id, item in discovered.items():
-        existing = registry["models"].get(model_id)
-        if existing and existing.get("manifest_sha256") not in {None, item["manifest_sha256"]}:
-            existing["status"] = "quarantined"
-            existing["present"] = True
-            existing["updated_at"] = now
-            existing["integrity_error"] = "immutable manifest changed after registration"
-            invalid.append({
+            if existing:
+                status = existing.get("status", item["initial_status"])
+                if status not in LIFECYCLE_STATES:
+                    status = "candidate"
+                first_seen = existing.get("discovered_at") or now
+            else:
+                status = item["initial_status"]
+                first_seen = now
+
+            registry["models"][model_id] = {
+                "scope": item["scope"],
+                "voice_id": item["voice_id"],
+                "engine": item["engine"],
+                "engine_version": item["engine_version"],
                 "manifest": item["manifest"],
-                "error": f"immutable manifest changed after registration: {model_id}",
-            })
-            continue
+                "manifest_sha256": item["manifest_sha256"],
+                "revision": item["revision"],
+                "status": status,
+                "present": True,
+                "discovered_at": first_seen,
+                "updated_at": now,
+            }
 
-        if existing:
-            status = existing.get("status", item["initial_status"])
-            if status not in LIFECYCLE_STATES:
-                status = "candidate"
-            first_seen = existing.get("discovered_at") or now
-        else:
-            status = item["initial_status"]
-            first_seen = now
+        # Conflicting physical identities cannot safely retain any previous
+        # default/validated status. Existing entries stay inspectable but cannot
+        # be resolved or promoted while the collision remains.
+        for model_id in duplicate_ids:
+            existing = registry["models"].get(model_id)
+            if isinstance(existing, dict):
+                existing["status"] = "quarantined"
+                existing["present"] = False
+                existing["updated_at"] = now
+                existing["integrity_error"] = "duplicate model_id in Model Root"
 
-        registry["models"][model_id] = {
-            "scope": item["scope"],
-            "voice_id": item["voice_id"],
-            "engine": item["engine"],
-            "engine_version": item["engine_version"],
-            "manifest": item["manifest"],
-            "manifest_sha256": item["manifest_sha256"],
-            "revision": item["revision"],
-            "status": status,
-            "present": True,
-            "discovered_at": first_seen,
-            "updated_at": now,
+        discovered_ids = set(discovered)
+        for model_id, entry in registry["models"].items():
+            if model_id not in discovered_ids:
+                entry["present"] = False
+                entry["updated_at"] = now
+
+        _save_registry_unlocked(registry, registry_path)
+        return {
+            "model_root": str(model_root),
+            "discovered": len(discovered),
+            "invalid": invalid,
+            "model_ids": sorted(discovered),
         }
-
-    discovered_ids = set(discovered)
-    for model_id, entry in registry["models"].items():
-        if model_id not in discovered_ids:
-            entry["present"] = False
-            entry["updated_at"] = now
-
-    save_registry(registry, registry_path)
-    return {
-        "model_root": str(model_root),
-        "discovered": len(discovered),
-        "invalid": invalid,
-        "model_ids": sorted(discovered),
-    }
 
 
 def _entry(model_id: str, registry_path: Path = REGISTRY_PATH) -> tuple[dict, dict]:
@@ -310,6 +412,8 @@ def resolve_model(
     _, entry = _entry(model_id, registry_path)
     if not entry.get("present", True):
         raise ValueError(f"model is not present in Model Root: {model_id}")
+    if entry.get("status") == "quarantined" or entry.get("integrity_error"):
+        raise ValueError(f"model is quarantined pending integrity review: {model_id}")
 
     manifest_rel = str(entry.get("manifest") or "").strip()
     if not manifest_rel:
@@ -351,7 +455,12 @@ def list_models(
             "status": entry.get("status"),
             "present": bool(entry.get("present", True)),
             "revision": entry.get("revision"),
-            "default_for_voice": registry.get("defaults", {}).get(entry.get("voice_id")) == model_id,
+            "default_for_voice": (
+                entry.get("status") == "default"
+                and entry.get("present") is True
+                and not entry.get("integrity_error")
+                and registry.get("defaults", {}).get(entry.get("voice_id")) == model_id
+            ),
         }
         if item["present"]:
             try:
@@ -373,7 +482,11 @@ def default_model_id(
     voice_id = _require_id(voice_id, "voice_id")
     registry = load_registry(registry_path)
     model_id = registry.get("defaults", {}).get(voice_id)
-    return str(model_id) if model_id else None
+    entry = registry["models"].get(model_id)
+    if (not isinstance(entry, dict) or entry.get("status") != "default"
+            or entry.get("present") is not True or entry.get("integrity_error")):
+        return None
+    return str(model_id)
 
 
 def set_status(
@@ -385,10 +498,11 @@ def set_status(
     status = str(status).strip()
     if status not in LIFECYCLE_STATES:
         raise ValueError(f"invalid lifecycle status: {status}")
-    registry, entry = _entry(model_id, registry_path)
-    entry["status"] = status
-    entry["updated_at"] = _now_iso()
-    save_registry(registry, registry_path)
+    with _registry_write_lock(registry_path):
+        registry, entry = _entry(model_id, registry_path)
+        entry["status"] = status
+        entry["updated_at"] = _now_iso()
+        _save_registry_unlocked(registry, registry_path)
 
 
 def promote_model(
@@ -397,44 +511,63 @@ def promote_model(
     registry_path: Path = REGISTRY_PATH,
     require_evaluation: bool = True,
     evaluation_dir: Path | None = None,
+    benchmark_dir: Path | None = None,
+    model_root: Path = MODEL_ROOT,
 ) -> None:
     from server.evaluation_registry import model_is_promotable
 
-    registry, entry = _entry(model_id, registry_path)
-    if entry.get("status") not in {"validated", "default"}:
-        raise ValueError("only a validated model can be promoted")
-    if require_evaluation:
-        if evaluation_dir is None:
-            promotable = model_is_promotable(model_id)
-        else:
-            promotable = model_is_promotable(model_id, directory=evaluation_dir)
-        if not promotable:
-            raise ValueError("model has no promotable validated evaluation")
+    with _registry_write_lock(registry_path):
+        registry, entry = _entry(model_id, registry_path)
+        if entry.get("scope", "voice-bound") == "shared":
+            raise ValueError("shared models cannot be promoted as a per-voice default")
+        if entry.get("status") not in {"validated", "default"}:
+            raise ValueError("only a validated model can be promoted")
+        if entry.get("present") is not True:
+            raise ValueError("model is not present in Model Root; cannot promote")
+        if entry.get("integrity_error"):
+            raise ValueError("quarantined model integrity error; cannot promote")
 
-    if entry.get("scope", "voice-bound") == "shared":
-        raise ValueError("shared models cannot be promoted as a per-voice default")
-    voice_id = _require_id(entry.get("voice_id"), "voice_id")
-    previous_id = registry.get("defaults", {}).get(voice_id)
-    if previous_id and previous_id != model_id:
-        previous = registry["models"].get(previous_id)
-        if isinstance(previous, dict) and previous.get("status") == "default":
-            previous["status"] = "validated"
-            previous["updated_at"] = _now_iso()
+        # The persisted registry and evaluation are only claims. Re-hash the
+        # currently installed immutable manifest and ALL recorded artifact bytes
+        # before creating or changing a serving default, even with an explicit
+        # require_evaluation=False administrative override.
+        resolved = resolve_model(model_id, model_root=model_root, registry_path=registry_path)
+        if (resolved.get("revision") != entry.get("revision")
+                or resolved.get("scope") != entry.get("scope", "voice-bound")
+                or resolved.get("voice_id") != entry.get("voice_id")):
+            raise ValueError("model identity changed since registry scan; cannot promote")
+        if require_evaluation:
+            evaluation_options = {"model_revision": entry.get("revision")}
+            if evaluation_dir is not None:
+                evaluation_options["directory"] = evaluation_dir
+            if benchmark_dir is not None:
+                evaluation_options["benchmark_dir"] = benchmark_dir
+            if not model_is_promotable(model_id, **evaluation_options):
+                raise ValueError("model has no provenance-matched promotable validated evaluation")
 
-    entry["status"] = "default"
-    entry["updated_at"] = _now_iso()
-    registry.setdefault("defaults", {})[voice_id] = model_id
-    save_registry(registry, registry_path)
+        voice_id = _require_id(entry.get("voice_id"), "voice_id")
+        previous_id = registry.get("defaults", {}).get(voice_id)
+        if previous_id and previous_id != model_id:
+            previous = registry["models"].get(previous_id)
+            if isinstance(previous, dict) and previous.get("status") == "default":
+                previous["status"] = "validated"
+                previous["updated_at"] = _now_iso()
+
+        entry["status"] = "default"
+        entry["updated_at"] = _now_iso()
+        registry.setdefault("defaults", {})[voice_id] = model_id
+        _save_registry_unlocked(registry, registry_path)
 
 
 def retire_model(model_id: str, *, registry_path: Path = REGISTRY_PATH) -> None:
-    registry, entry = _entry(model_id, registry_path)
-    voice_id = entry.get("voice_id")
-    if voice_id and registry.get("defaults", {}).get(voice_id) == model_id:
-        raise ValueError("cannot retire the current default model before promoting another model")
-    entry["status"] = "retired"
-    entry["updated_at"] = _now_iso()
-    save_registry(registry, registry_path)
+    with _registry_write_lock(registry_path):
+        registry, entry = _entry(model_id, registry_path)
+        voice_id = entry.get("voice_id")
+        if voice_id and registry.get("defaults", {}).get(voice_id) == model_id:
+            raise ValueError("cannot retire the current default model before promoting another model")
+        entry["status"] = "retired"
+        entry["updated_at"] = _now_iso()
+        _save_registry_unlocked(registry, registry_path)
 
 
 def _legacy_search_roots() -> list[Path]:
@@ -503,16 +636,88 @@ def locate_legacy_weight(path_value: str, expected_suffix: str) -> Path:
     return ranked[0]
 
 
-def _copy_immutable(source: Path, destination: Path, expected_hash: str) -> None:
+def _assert_import_destination(destination: Path, model_root: Path) -> None:
+    """Reject symlink-controlled paths within the configured Model Root.
+
+    This is a preflight guard, not protection against a hostile concurrent
+    process replacing filesystem components mid-write.
+    """
+    # A configured Model Root may itself be a symlink/mounted alias.
+    # Normalize its lexical prefix before checking each *child* component.
+    lexical_root = Path(os.path.abspath(model_root.expanduser()))
+    root = lexical_root.resolve()
+    lexical = Path(os.path.abspath(destination.expanduser()))
+    try:
+        relative = lexical.relative_to(lexical_root)
+    except ValueError as exc:
+        raise ValueError("model import destination escapes Model Root") from exc
+    cursor = root
+    for component in relative.parts:
+        cursor = cursor / component
+        if cursor.is_symlink():
+            raise ValueError(f"model import destination contains a symlink: {cursor}")
+    if not lexical.resolve().is_relative_to(root):
+        raise ValueError("model import destination escapes Model Root")
+
+
+def _copy_immutable(
+    source: Path, destination: Path, expected_hash: str, *, model_root: Path,
+) -> None:
+    """Stage, hash, then publish an immutable artifact without overwriting."""
+    _assert_import_destination(destination, model_root)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    _assert_import_destination(destination, model_root)
     if destination.exists():
-        if sha256_file(destination) != expected_hash:
+        if not destination.is_file() or sha256_file(destination) != expected_hash:
             raise ValueError(f"immutable artifact already exists with different content: {destination}")
         return
-    shutil.copy2(source, destination)
-    if sha256_file(destination) != expected_hash:
-        destination.unlink(missing_ok=True)
-        raise ValueError(f"artifact copy verification failed: {destination}")
+
+    staging = destination.with_name(destination.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        digest = hashlib.sha256()
+        with source.open("rb") as incoming, staging.open("xb") as outgoing:
+            while block := incoming.read(1024 * 1024):
+                outgoing.write(block)
+                digest.update(block)
+            outgoing.flush()
+            os.fsync(outgoing.fileno())
+        if digest.hexdigest() != expected_hash or sha256_file(staging) != expected_hash:
+            raise ValueError(f"source artifact changed during immutable copy: {source}")
+        _assert_import_destination(destination, model_root)
+        try:
+            # Hard-link publication is create-only on POSIX and Windows NTFS:
+            # unlike rename/replace it cannot overwrite an existing artifact.
+            os.link(staging, destination)
+        except FileExistsError:
+            if (not destination.is_file()
+                    or destination.is_symlink()
+                    or sha256_file(destination) != expected_hash):
+                raise ValueError(f"immutable artifact was concurrently replaced: {destination}")
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _import_model_id(voice_id: str, source_model_id: str, version: str, identity_hash: str) -> str:
+    """Preserve source-content identity when the descriptive prefix is long."""
+    if not re.fullmatch(r"[0-9a-f]{12}", identity_hash):
+        raise ValueError("model import fingerprint requires twelve lowercase hex digits")
+    prefix = _safe_component(f"{voice_id}-gpt-sovits-{version}-{source_model_id}")
+    # Reserve the entire suffix, including its separator, before truncation.
+    prefix = prefix[:127 - 1 - len(identity_hash)].rstrip(".-_") or "model"
+    model_id = f"{prefix}-{identity_hash}"
+    return _require_id(model_id, "model_id")
+
+
+def _equivalent_import_manifest(existing: dict, proposed: dict) -> bool:
+    """Only the creation timestamp may vary across an idempotent retry."""
+    if not isinstance(existing, dict):
+        return False
+    left, right = json.loads(json.dumps(existing)), json.loads(json.dumps(proposed))
+    for item in (left, right):
+        lifecycle = item.get("lifecycle")
+        if isinstance(lifecycle, dict):
+            lifecycle.pop("created_at", None)
+    return left == right
 
 
 def import_gpt_sovits_model(
@@ -540,10 +745,7 @@ def import_gpt_sovits_model(
     ).hexdigest()[:12]
 
     engine_version = str(version or "").strip() or "unknown"
-    model_id = _safe_component(
-        f"{voice_id}-gpt-sovits-{engine_version}-{source_model_id}-{identity_hash}"
-    )[:127]
-    _require_id(model_id, "model_id")
+    model_id = _import_model_id(voice_id, source_model_id, engine_version, identity_hash)
 
     model_dir = (
         model_root.expanduser()
@@ -555,8 +757,9 @@ def import_gpt_sovits_model(
     gpt_destination = artifacts_dir / "gpt.ckpt"
     sovits_destination = artifacts_dir / "sovits.pth"
 
-    _copy_immutable(gpt_source, gpt_destination, gpt_hash)
-    _copy_immutable(sovits_source, sovits_destination, sovits_hash)
+    _assert_import_destination(model_dir / MANIFEST_FILENAME, model_root)
+    _copy_immutable(gpt_source, gpt_destination, gpt_hash, model_root=model_root)
+    _copy_immutable(sovits_source, sovits_destination, sovits_hash, model_root=model_root)
 
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -590,18 +793,30 @@ def import_gpt_sovits_model(
 
     model_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = model_dir / MANIFEST_FILENAME
+    _assert_import_destination(manifest_path, model_root)
     if manifest_path.exists():
         existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if existing != manifest:
-            # created_at is intentionally not part of identity; preserve the first manifest
-            existing_artifacts = existing.get("artifacts") if isinstance(existing, dict) else None
-            if existing_artifacts != manifest["artifacts"] or existing.get("model_id") != model_id:
-                raise ValueError(f"immutable model directory already contains a different manifest: {model_dir}")
+        if not _equivalent_import_manifest(existing, manifest):
+            raise ValueError(f"immutable model directory already contains a different manifest: {model_dir}")
     else:
-        manifest_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        # No truncatable manifest on a partially successful write, and no
+        # overwrite of a concurrently created immutable manifest.
+        staged_manifest = manifest_path.with_name("model." + uuid.uuid4().hex + ".tmp")
+        try:
+            with staged_manifest.open("x", encoding="utf-8", newline="\n") as stream:
+                json.dump(manifest, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            _assert_import_destination(manifest_path, model_root)
+            try:
+                os.link(staged_manifest, manifest_path)
+            except FileExistsError:
+                existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if not _equivalent_import_manifest(existing, manifest):
+                    raise ValueError(f"concurrent immutable model manifest differs: {model_dir}")
+        finally:
+            staged_manifest.unlink(missing_ok=True)
 
     scan_model_root(model_root=model_root, registry_path=registry_path)
     return model_id
