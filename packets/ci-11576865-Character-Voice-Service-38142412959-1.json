@@ -1,0 +1,55 @@
+{
+  "packet_version": 1,
+  "packet_id": "ci-11576865-Character-Voice-Service-38142412959-1",
+  "status": "pending",
+  "record_type": "ci_failure",
+  "title": "CVS tests: failure",
+  "summary": "Tracked CI workflow did not complete successfully. Source adapter captured failed job/step evidence when available.",
+  "source_repository": "11576865/Character-Voice-Service",
+  "source_event": "workflow_run",
+  "source_ref": "fix/core-wav-output-validation-v1",
+  "source_sha": "1245b4e31e33aafc9cbbe31a75d537cf3d36e292",
+  "source_url": "https://github.com/11576865/Character-Voice-Service/actions/runs/38142412959",
+  "created_at": "2026-10-11T13:15:35+00:00",
+  "dedupe_key": "workflow_run:11576865/Character-Voice-Service:38142412959:1",
+  "routing_hints": [
+    "architecture",
+    "operations",
+    "red-reason",
+    "reliability"
+  ],
+  "evidence": {
+    "workflow": "CVS tests",
+    "run_id": "38142412959",
+    "run_attempt": "1",
+    "conclusion": "failure",
+    "trigger_event": "push",
+    "failed_jobs": [
+      {
+        "id": 114478804718,
+        "name": "windows-script-audit",
+        "conclusion": "failure"
+      },
+      {
+        "id": 114478804890,
+        "name": "test",
+        "conclusion": "failure"
+      }
+    ],
+    "failed_steps": [
+      {
+        "job": "windows-script-audit",
+        "number": 4,
+        "name": "Test Windows model, inference and runtime invariants",
+        "conclusion": "failure"
+      },
+      {
+        "job": "test",
+        "number": 5,
+        "name": "Run python -m pytest -q",
+        "conclusion": "failure"
+      }
+    ],
+    "capture_error": ""
+  }
+}
