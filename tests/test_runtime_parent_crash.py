@@ -203,3 +203,43 @@ def test_actual_parent_kill_during_popen_preserves_unresolved_start_intent(tmp_p
             lease.release()
     finally:
         _kill_parent(controller)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux procfs visibility contract")
+def test_unreadable_procfs_entry_does_not_certify_gpu_group_as_empty(monkeypatch):
+    original_iterdir = Path.iterdir
+    original_read = Path.read_text
+
+    def one_hidden_entry(path):
+        if str(path) == "/proc":
+            return iter([Path("/proc/99999999")])
+        return original_iterdir(path)
+
+    def unreadable_stat(path, *args, **kwargs):
+        if str(path) == "/proc/99999999/stat":
+            raise PermissionError("injected hidepid process")
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "iterdir", one_hidden_entry)
+    monkeypatch.setattr(Path, "read_text", unreadable_stat)
+    assert _live_posix_group_members(99999999) is None
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux procfs visibility contract")
+def test_disappearing_procfs_entry_is_not_a_false_occupant(monkeypatch):
+    original_iterdir = Path.iterdir
+    original_read = Path.read_text
+
+    def one_vanished_entry(path):
+        if str(path) == "/proc":
+            return iter([Path("/proc/99999999")])
+        return original_iterdir(path)
+
+    def missing_stat(path, *args, **kwargs):
+        if str(path) == "/proc/99999999/stat":
+            raise FileNotFoundError("process vanished between enumeration and inspection")
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "iterdir", one_vanished_entry)
+    monkeypatch.setattr(Path, "read_text", missing_stat)
+    assert _live_posix_group_members(99999999) is False
