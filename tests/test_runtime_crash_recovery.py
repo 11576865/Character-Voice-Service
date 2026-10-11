@@ -195,3 +195,20 @@ time.sleep(15)
         assert attempts.read_text(encoding="utf-8").splitlines() == ["start"]
     finally:
         supervisor.shutdown_all()
+
+
+def test_spawn_oserror_is_classified_and_backed_off(tmp_path, monkeypatch):
+    supervisor, _, _ = _runtime(tmp_path, _HEALTHY)
+
+    def reject_spawn(*args, **kwargs):
+        raise OSError("injected executable launch failure")
+
+    monkeypatch.setattr("server.runtime_supervisor.subprocess.Popen", reject_spawn)
+    with pytest.raises(RuntimeSupervisorError, match="unable to spawn managed runtime"):
+        supervisor.start("test-engine")
+    state = supervisor.status("test-engine")
+    assert state["status"] == "restart-backoff"
+    assert state["last_start_failure"] == "spawn-failed"
+    assert state["last_exit"] is None
+    with pytest.raises(RuntimeSupervisorError, match="restart backoff active"):
+        supervisor.start("test-engine")
