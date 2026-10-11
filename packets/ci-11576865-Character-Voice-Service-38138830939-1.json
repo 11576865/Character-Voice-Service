@@ -1,0 +1,44 @@
+{
+  "packet_version": 1,
+  "packet_id": "ci-11576865-Character-Voice-Service-38138830939-1",
+  "status": "pending",
+  "record_type": "ci_failure",
+  "title": "CVS tests: failure",
+  "summary": "Tracked CI workflow did not complete successfully. Source adapter captured failed job/step evidence when available.",
+  "source_repository": "11576865/Character-Voice-Service",
+  "source_event": "workflow_run",
+  "source_ref": "fix/gpt-sovits-crossprocess-serving-transaction-v1",
+  "source_sha": "b953e7bf93743c06e0ef3d1a7b316d81ce7b6247",
+  "source_url": "https://github.com/11576865/Character-Voice-Service/actions/runs/38138830939",
+  "created_at": "2026-10-11T12:22:59+00:00",
+  "dedupe_key": "workflow_run:11576865/Character-Voice-Service:38138830939:1",
+  "routing_hints": [
+    "architecture",
+    "operations",
+    "red-reason",
+    "reliability"
+  ],
+  "evidence": {
+    "workflow": "CVS tests",
+    "run_id": "38138830939",
+    "run_attempt": "1",
+    "conclusion": "failure",
+    "trigger_event": "push",
+    "failed_jobs": [
+      {
+        "id": 114468248472,
+        "name": "test",
+        "conclusion": "failure"
+      }
+    ],
+    "failed_steps": [
+      {
+        "job": "test",
+        "number": 5,
+        "name": "Run python -m pytest -q",
+        "conclusion": "failure"
+      }
+    ],
+    "capture_error": ""
+  }
+}
