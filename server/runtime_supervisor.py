@@ -15,6 +15,10 @@ from typing import BinaryIO
 from server.config import DATA_DIR
 from server.runtime_registry import RuntimeRegistry, RuntimeSpec, load_runtime_registry
 from server.runtime_slot_lease import RuntimeSlotLease, acquire_runtime_slot
+from server.runtime_process_tree import (
+    ProcessTreeUncertain, managed_command, spawn_options,
+    reconcile_exited_tree, stop_managed_tree,
+)
 from server.runtime_external_activation import (
     ExternalActivationUncertain,
     acquire_activation_lease, pending_activation, publish_activation, acknowledge_activation,
@@ -48,6 +52,8 @@ class _OwnedProcess:
     started_at: float
     slot_lease: RuntimeSlotLease | None = None
     launch_id: str | None = None
+    exit_observed: bool = False
+    tree_uncertain: str | None = None
 
 
 class RuntimeSupervisor:
@@ -232,22 +238,31 @@ class RuntimeSupervisor:
         code = owned.process.poll()
         if code is None:
             return
-        uptime = max(0.0, time.time() - owned.started_at)
-        # A stable process that ran for a full history window starts a new
-        # failure sequence; do not accumulate penalties across healthy hours.
-        if uptime >= CRASH_HISTORY_WINDOW_SECONDS:
-            self._failures.pop(engine_id, None)
-        self._last_exit[engine_id] = {
-            "pid": owned.process.pid,
-            "returncode": code,
-            "uptime_seconds": round(uptime, 2),
-            "observed_unix": time.time(),
-            "log_path": str(owned.log_path),
-            "reason": "unexpected-exit",
-        }
-        self._record_failure(engine_id, "unexpected-exit")
-        # Do not release the group lease until the matched launch receipt
-        # has been removed *after* observing this child exit.
+        if not owned.exit_observed:
+            uptime = max(0.0, time.time() - owned.started_at)
+            if uptime >= CRASH_HISTORY_WINDOW_SECONDS:
+                self._failures.pop(engine_id, None)
+            self._last_exit[engine_id] = {
+                "pid": owned.process.pid,
+                "returncode": code,
+                "uptime_seconds": round(uptime, 2),
+                "observed_unix": time.time(),
+                "log_path": str(owned.log_path),
+                "reason": "unexpected-exit",
+            }
+            self._record_failure(engine_id, "unexpected-exit")
+            owned.exit_observed = True
+
+        # A dead direct PID is not evidence that its descendants stopped.
+        # Keep the group lease AND durable receipt when descendants exist.
+        try:
+            reconcile_exited_tree(
+                owned.process, owned.slot_lease.group if owned.slot_lease else None,
+            )
+        except ProcessTreeUncertain as exc:
+            owned.tree_uncertain = str(exc)
+            return
+        owned.tree_uncertain = None
         if owned.slot_lease and owned.launch_id:
             clear_launch_receipt(
                 owned.slot_lease.group, self._slot_dir, owned.launch_id,
@@ -326,6 +341,8 @@ class RuntimeSupervisor:
             cooldown = self._restart_cooldown(engine_id) if spec.managed else 0.0
             if spec.managed and state == "stopped" and cooldown > 0:
                 state = "restart-backoff"
+            if owned and owned.tree_uncertain and not ready:
+                state = "process-tree-unresolved"
 
             # A durable receipt can outlive the parent that created it.
             # Surface unresolved evidence without claiming GPU hardware state.
@@ -412,6 +429,7 @@ class RuntimeSupervisor:
                 "restart_backoff_seconds": round(cooldown, 2),
                 "last_start_failure": self._failures.get(engine_id, {}).get("reason"),
                 "owner_receipt": owner_receipt,
+                "process_tree_unresolved": owned.tree_uncertain if owned else None,
             }
 
         finally:
@@ -438,14 +456,20 @@ class RuntimeSupervisor:
                 "managed_by_supervisor": False,
             }
 
-        process = owned.process
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=spec.shutdown_timeout)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+        # Contained groups must be stopped as a unit. If group teardown
+        # cannot be confirmed, do not erase the launch receipt or unlock GPU.
+        try:
+            stop_managed_tree(
+                owned.process,
+                owned.slot_lease.group if owned.slot_lease else None,
+                spec.shutdown_timeout,
+            )
+        except (ProcessTreeUncertain, subprocess.TimeoutExpired, OSError) as exc:
+            owned.tree_uncertain = str(exc)
+            raise RuntimeConflictError(
+                f"{engine_id}: unable to verify managed process tree teardown: {exc}"
+            ) from exc
+
         if owned.slot_lease and owned.launch_id:
             clear_launch_receipt(
                 owned.slot_lease.group, self._slot_dir, owned.launch_id,
@@ -513,6 +537,11 @@ class RuntimeSupervisor:
                 )
 
             owned = self._owned.get(engine_id)
+            if owned and owned.tree_uncertain:
+                raise RuntimeConflictError(
+                    f"{engine_id}: previous managed process tree unresolved: "
+                    f"{owned.tree_uncertain}; stop or investigate before retry"
+                )
             if owned and owned.process.poll() is None:
                 return self.status(engine_id)
 
@@ -569,13 +598,14 @@ class RuntimeSupervisor:
                         spec.exclusive_group, self._slot_dir, engine_id,
                     )
                 process = subprocess.Popen(
-                    spec.command(),
+                    managed_command(spec.command(), spec.exclusive_group),
                     cwd=str(spec.cwd),
                     env=self._environment(spec),
                     stdin=subprocess.DEVNULL,
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
                     creationflags=creationflags,
+                    **spawn_options(spec.exclusive_group),
                 )
                 if slot_lease:
                     publish_running(
@@ -587,11 +617,11 @@ class RuntimeSupervisor:
                 reaped = process is None
                 if process is not None:
                     try:
-                        if process.poll() is None:
-                            process.kill()
-                        process.wait(timeout=5)
+                        stop_managed_tree(
+                            process, spec.exclusive_group, spec.shutdown_timeout,
+                        )
                         reaped = True
-                    except (OSError, subprocess.TimeoutExpired):
+                    except (OSError, subprocess.TimeoutExpired, ProcessTreeUncertain):
                         reaped = False
                 if log_handle:
                     log_handle.close()
