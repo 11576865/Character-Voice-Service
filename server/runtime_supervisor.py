@@ -15,6 +15,10 @@ from typing import BinaryIO
 from server.config import DATA_DIR
 from server.runtime_registry import RuntimeRegistry, RuntimeSpec, load_runtime_registry
 from server.runtime_slot_lease import RuntimeSlotLease, acquire_runtime_slot
+from server.runtime_orphan_receipt import (
+    UncertainRuntimeOwner, read_receipt, reconcile_prior_owner,
+    publish_starting, publish_running, clear_launch_receipt,
+)
 
 
 class RuntimeSupervisorError(RuntimeError):
@@ -39,6 +43,7 @@ class _OwnedProcess:
     log_handle: BinaryIO
     started_at: float
     slot_lease: RuntimeSlotLease | None = None
+    launch_id: str | None = None
 
 
 class RuntimeSupervisor:
@@ -237,6 +242,12 @@ class RuntimeSupervisor:
             "reason": "unexpected-exit",
         }
         self._record_failure(engine_id, "unexpected-exit")
+        # Do not release the group lease until the matched launch receipt
+        # has been removed *after* observing this child exit.
+        if owned.slot_lease and owned.launch_id:
+            clear_launch_receipt(
+                owned.slot_lease.group, self._slot_dir, owned.launch_id,
+            )
         try:
             owned.log_handle.close()
         finally:
@@ -312,6 +323,23 @@ class RuntimeSupervisor:
             if spec.managed and state == "stopped" and cooldown > 0:
                 state = "restart-backoff"
 
+            # A durable receipt can outlive the parent that created it.
+            # Surface unresolved evidence without claiming GPU hardware state.
+            owner_receipt = None
+            if spec.managed and spec.exclusive_group and not process_running:
+                try:
+                    old = read_receipt(spec.exclusive_group, self._slot_dir)
+                    if old is not None:
+                        owner_receipt = {
+                            "state": old["state"],
+                            "engine_id": old.get("engine_id"),
+                            "pid": old.get("pid"),
+                        }
+                except UncertainRuntimeOwner as exc:
+                    owner_receipt = {"state": "unreadable", "reason": str(exc)}
+                if owner_receipt and not ready and state in {"stopped", "restart-backoff"}:
+                    state = "ownership-unresolved"
+
             external = self._external_supervisor_status(spec) if not spec.managed else None
             external_pid = external.get("pid") if external else None
             external_state = str(external.get("supervisor_state") or "") if external else ""
@@ -344,6 +372,7 @@ class RuntimeSupervisor:
                 "restart_failures": self._failures.get(engine_id, {}).get("count", 0),
                 "restart_backoff_seconds": round(cooldown, 2),
                 "last_start_failure": self._failures.get(engine_id, {}).get("reason"),
+                "owner_receipt": owner_receipt,
             }
 
         finally:
@@ -378,6 +407,10 @@ class RuntimeSupervisor:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+        if owned.slot_lease and owned.launch_id:
+            clear_launch_receipt(
+                owned.slot_lease.group, self._slot_dir, owned.launch_id,
+            )
         try:
             owned.log_handle.close()
         finally:
@@ -461,8 +494,8 @@ class RuntimeSupervisor:
 
             self._enforce_exclusive_group(spec, registry)
 
-            # A live engine must own the OS lease for its entire observed
-            # lifetime; the supervisor RLock alone is not cross-process.
+            # Cooperative lock first, then reconcile a durable receipt
+            # left by any previous parent that may have died.
             slot_lease = None
             if spec.exclusive_group:
                 slot_lease = acquire_runtime_slot(spec.exclusive_group, self._slot_dir)
@@ -471,9 +504,16 @@ class RuntimeSupervisor:
                         f"{engine_id}: exclusive runtime group {spec.exclusive_group} "
                         "is held by another CVS process; do not start a second GPU engine"
                     )
-
+            process = None
             log_handle = None
+            launch_id = None
             try:
+                if slot_lease:
+                    try:
+                        reconcile_prior_owner(spec.exclusive_group, self._slot_dir)
+                    except UncertainRuntimeOwner as exc:
+                        raise RuntimeConflictError(str(exc)) from exc
+
                 self._log_dir.mkdir(parents=True, exist_ok=True)
                 log_path = self._log_dir / f"{engine_id}.log"
                 log_handle = log_path.open("ab", buffering=0)
@@ -481,6 +521,14 @@ class RuntimeSupervisor:
                 if os.name == "nt":
                     creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
                     creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+                # Publish "starting" BEFORE entering Popen. If this parent
+                # crashes before writing the child's PID, later starts
+                # fail closed instead of presuming no child was spawned.
+                if slot_lease:
+                    launch_id = publish_starting(
+                        spec.exclusive_group, self._slot_dir, engine_id,
+                    )
                 process = subprocess.Popen(
                     spec.command(),
                     cwd=str(spec.cwd),
@@ -490,12 +538,37 @@ class RuntimeSupervisor:
                     stderr=subprocess.STDOUT,
                     creationflags=creationflags,
                 )
+                if slot_lease:
+                    publish_running(
+                        spec.exclusive_group, self._slot_dir, launch_id, process.pid,
+                    )
             except BaseException as exc:
+                # If a child was created but its identity could not be
+                # published, kill and reap it before clearing its receipt.
+                reaped = process is None
+                if process is not None:
+                    try:
+                        if process.poll() is None:
+                            process.kill()
+                        process.wait(timeout=5)
+                        reaped = True
+                    except (OSError, subprocess.TimeoutExpired):
+                        reaped = False
                 if log_handle:
                     log_handle.close()
                 if slot_lease:
-                    slot_lease.release()
-                if isinstance(exc, Exception):
+                    try:
+                        # Popen errors before a returned handle are ambiguous:
+                        # keep the "starting" intent for manual reconciliation.
+                        if launch_id and process is not None and reaped:
+                            clear_launch_receipt(
+                                spec.exclusive_group, self._slot_dir, launch_id,
+                            )
+                    finally:
+                        slot_lease.release()
+                if isinstance(exc, UncertainRuntimeOwner):
+                    raise RuntimeConflictError(str(exc)) from exc
+                if isinstance(exc, Exception) and not isinstance(exc, RuntimeConflictError):
                     self._record_failure(engine_id, "spawn-failed")
                     if isinstance(exc, OSError):
                         raise RuntimeSupervisorError(
@@ -509,6 +582,7 @@ class RuntimeSupervisor:
                 log_handle=log_handle,
                 started_at=time.time(),
                 slot_lease=slot_lease,
+                launch_id=launch_id,
             )
 
             deadline = time.monotonic() + spec.startup_timeout

@@ -79,3 +79,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 跨进程 GPU 独占组租约
 
 [Runtime GPU slot ownership v1](docs/runtime-slot-cross-process-v1.md) 为托管引擎增加操作系统文件锁：同一 `CVS_DATA_DIR` 的多个 CVS 进程不再仅凭健康探测同时启动占用同一 `exclusive_group` 的语音引擎。租约随已观测的托管子进程生命周期持有，异常终止和正常停止会释放。它不能证明 CVS 父进程崩溃后没有遗留仍在占用 GPU 的孤儿引擎，也不自动协调独立的 System Supervisor。
+
+## 异常退出后的引擎所有权恢复
+
+[Managed runtime orphan-owner receipt v1](docs/runtime-orphan-ownership-receipt-v1.md) 在 GPU 组锁保护下持久化启动意图、子进程 PID 与进程创建身份。CVS 父进程崩溃后，新的管理实例不会仅因锁释放而假定 GPU 已空闲；若旧引擎仍存活、启动记录不完整或无法验证，就拒绝重复启动并要求人工核查。当前适用 Linux/Windows 托管引擎，不代表所有 GPU 子进程或外部 Supervisor 都已纳入同一协议。
