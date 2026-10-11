@@ -57,7 +57,22 @@ class RuntimeSupervisor:
                 headers={"User-Agent": "Character-Voice-Service-Runtime-Supervisor/1"},
             )
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                response.read(128)
+                content_type = response.headers.get("Content-Type", "")
+                body = response.read(4096)
+            # Health endpoints can be responsive while the single inference
+            # slot is occupied. That is healthy but not idle/ready to admit
+            # another synthesis request.
+            if "application/json" in content_type.lower():
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except (UnicodeError, json.JSONDecodeError):
+                    payload = None
+                if isinstance(payload, dict):
+                    state = str(payload.get("status") or "").lower()
+                    if state == "busy":
+                        return True, "busy"
+                    if state in {"stopping", "failed", "unhealthy"}:
+                        return False, f"runtime health status: {state}"
             return True, None
         except Exception as exc:
             return False, str(exc)
@@ -198,7 +213,9 @@ class RuntimeSupervisor:
             ready, health_error = self._health(spec)
             process_running = bool(owned and owned.process.poll() is None)
 
-            if process_running and ready:
+            if ready and health_error == "busy":
+                state = "busy"
+            elif process_running and ready:
                 state = "ready"
             elif process_running:
                 state = "starting"
@@ -225,6 +242,7 @@ class RuntimeSupervisor:
                 "lifecycle_owner": spec.lifecycle_owner,
                 "status": state,
                 "ready": ready,
+                "busy": bool(ready and health_error == "busy"),
                 "managed_by_supervisor": process_running,
                 "pid": owned.process.pid if process_running else external_pid,
                 "external_supervisor": external,
