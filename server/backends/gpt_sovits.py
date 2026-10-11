@@ -1,13 +1,19 @@
+import hashlib
 import json
+import os
 import threading
+import time
+import uuid
+from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from fastapi import HTTPException
 
-from server.config import GPT_SOVITS_BASE_URL
+from server.config import DATA_DIR, GPT_SOVITS_BASE_URL
 from server.runtime_registry import runtime_base_url
+from server.runtime_slot_lease import acquire_runtime_slot
 
 # Compatibility constants for callers/tests; synthesis resolves the machine-local
 # Runtime Registry endpoint dynamically at call time.
@@ -57,7 +63,7 @@ def _set_weight(url: str, path: str, label: str) -> None:
         ) from exc
 
 
-def _ensure_selected_model(profile: dict) -> None:
+def _ensure_selected_model(profile: dict, urls: tuple[str, str, str]) -> None:
     global _active_managed_model
 
     model = profile.get("selected_model") or {}
@@ -78,13 +84,12 @@ def _ensure_selected_model(profile: dict) -> None:
         return
 
     signature = (str(gpt_weights), str(sovits_weights))
-    if signature == _active_managed_model:
-        return
-
-    # GPT-SoVITS exposes these as separate GET control endpoints. Keep the
-    # whole switch + synthesis operation under one lock so concurrent requests
-    # cannot cross model boundaries.
-    tts_url, set_gpt_url, set_sovits_url = _urls()
+    # The old in-memory cache is NOT proof of backend state: another CVS
+    # process can change weights, and a restarted GPT-SoVITS process can
+    # forget them while this process retains its module globals. Until the
+    # backend advertises an attested model/epoch, always reassert both weights
+    # for every managed transaction, including the same model twice.
+    _, set_gpt_url, set_sovits_url = urls
 
     _set_weight(
         set_sovits_url,
@@ -99,8 +104,8 @@ def _ensure_selected_model(profile: dict) -> None:
     _active_managed_model = signature
 
 
-def _synthesize_locked(text: str, speed: float, profile: dict) -> bytes:
-    _ensure_selected_model(profile)
+def _synthesize_locked(text: str, speed: float, profile: dict, urls: tuple[str, str, str]) -> bytes:
+    _ensure_selected_model(profile, urls)
     params = profile.get("parameters", {})
 
     payload = {
@@ -135,7 +140,7 @@ def _synthesize_locked(text: str, speed: float, profile: dict) -> bytes:
     }
 
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    tts_url, _, _ = _urls()
+    tts_url, _, _ = urls
     request = urllib.request.Request(
         tts_url,
         data=body,
@@ -157,6 +162,107 @@ def _synthesize_locked(text: str, speed: float, profile: dict) -> bytes:
         ) from exc
 
 
+def _transaction_paths(tts_url: str) -> tuple[str, Path, Path]:
+    key = "gpt-txn-" + hashlib.sha256(tts_url.encode("utf-8")).hexdigest()[:32]
+    root = DATA_DIR / "inference-transactions"
+    return key, root, root / (key + ".pending.json")
+
+
+def _begin_transaction(receipt: Path, *, tts_url: str, model: dict) -> str:
+    # Called only while holding the endpoint-scoped OS lock. Once a
+    # controller dies, that OS lease can disappear while the real backend
+    # is STILL synthesizing; the durable intent prevents unsafe takeover.
+    if receipt.exists() or receipt.is_symlink():
+        raise HTTPException(
+            status_code=503,
+            detail="GPT-SoVITS previous inference outcome is unresolved; "
+                   "inspect the actual backend before manually reconciling",
+            headers={"Retry-After": "5"},
+        )
+    request_id = uuid.uuid4().hex
+    intent = {
+        "schema_version": 1,
+        "phase": "pending",
+        "request_id": request_id,
+        "engine": "gpt-sovits",
+        "endpoint": tts_url,
+        "model_id": str(model.get("model_id") or model.get("id") or ""),
+        "started_unix": time.time(),
+    }
+    stage = receipt.with_name(receipt.name + "." + request_id + ".tmp")
+    try:
+        with stage.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(intent, stream, ensure_ascii=False, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(stage, receipt)
+    finally:
+        stage.unlink(missing_ok=True)
+    return request_id
+
+
+def _finish_transaction(receipt: Path, request_id: str) -> None:
+    try:
+        current = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="GPT-SoVITS completed but inference transaction receipt is unreadable",
+        ) from exc
+    if current.get("request_id") != request_id:
+        raise HTTPException(
+            status_code=503,
+            detail="GPT-SoVITS inference receipt identity changed; refusing to clear",
+        )
+    receipt.unlink()
+
+
 def synthesize(text: str, speed: float, profile: dict) -> bytes:
+    # Local mutex prevents same-process request interleaving. The independent
+    # OS lock must cover the entire weight-switch + inference transaction
+    # across *all cooperating CVS processes* targeting this exact endpoint.
+    # A launch/GPU-slot lock is not sufficient: it governs child lifetimes,
+    # not concurrent /set_weights and /tts requests from different parents.
     with _backend_lock:
-        return _synthesize_locked(text, speed, profile)
+        urls = _urls()  # Freeze the backend endpoint for one transaction.
+        tts_url = urls[0]
+        lock_key, root, receipt = _transaction_paths(tts_url)
+        try:
+            lease = acquire_runtime_slot(lock_key, root)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"GPT-SoVITS inference admission unavailable: {exc}",
+                headers={"Retry-After": "2"},
+            ) from exc
+        if lease is None:
+            raise HTTPException(
+                status_code=503,
+                detail="GPT-SoVITS backend is busy with another CVS synthesis transaction",
+                headers={"Retry-After": "2"},
+            )
+        try:
+            # Reject a known-invalid local mode transition before writing an
+            # uncertain-outcome receipt: no backend operation has begun yet.
+            selected = profile.get("selected_model") or {}
+            if (
+                not (selected.get("gpt_weights") and selected.get("sovits_weights"))
+                and _active_managed_model is not None
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="The selected model is externally loaded, but this CVS process "
+                           "already switched GPT-SoVITS to a managed model",
+                )
+            request_id = _begin_transaction(
+                receipt, tts_url=tts_url, model=selected,
+            )
+            # Do not delete an ambiguous transaction on upstream I/O failure,
+            # timeout, weight-switch failure, or process termination. An
+            # operator must verify the backend is idle before clearing it.
+            audio = _synthesize_locked(text, speed, profile, urls)
+            _finish_transaction(receipt, request_id)
+            return audio
+        finally:
+            lease.release()

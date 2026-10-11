@@ -53,7 +53,8 @@ class FakeResponse:
 
 
 @pytest.fixture(autouse=True)
-def reset_backend_state():
+def reset_backend_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(backend, "DATA_DIR", tmp_path)
     backend.reset_model_state()
     yield
     backend.reset_model_state()
@@ -104,8 +105,10 @@ def test_managed_model_switches_weights_before_tts_and_reuses_loaded_model(monke
     assert calls[1].startswith(backend.GPT_SOVITS_SET_GPT_WEIGHTS_URL)
     assert "D%3A%2Fmodels%2Fa.ckpt" in calls[1]
     assert calls[2] == backend.GPT_SOVITS_TTS_URL
-    assert calls[3] == backend.GPT_SOVITS_TTS_URL
-    assert len(calls) == 4
+    assert calls[3].startswith(backend.GPT_SOVITS_SET_SOVITS_WEIGHTS_URL)
+    assert calls[4].startswith(backend.GPT_SOVITS_SET_GPT_WEIGHTS_URL)
+    assert calls[5] == backend.GPT_SOVITS_TTS_URL
+    assert len(calls) == 6
 
 
 def test_switching_registered_model_loads_new_weight_pair(monkeypatch):
@@ -194,3 +197,60 @@ def test_weight_switch_http_error_is_reported_before_tts(monkeypatch):
     assert exc_info.value.status_code == 502
     assert "weight switch" in exc_info.value.detail
     assert "bad model path" in exc_info.value.detail
+
+
+
+def test_backend_restart_cannot_reuse_stale_weight_cache(monkeypatch):
+    # Even when a CVS worker retains its old cache, a restarted backend
+    # must receive both selected weights before a second synthesis.
+    loaded = {"gpt": None, "sovits": None}
+    switched = []
+
+    def fake_urlopen(request, timeout):
+        from urllib.parse import parse_qs, urlsplit
+        url = request if isinstance(request, str) else request.full_url
+        if "/set_sovits_weights" in url:
+            loaded["sovits"] = parse_qs(urlsplit(url).query)["weights_path"][0]
+            switched.append("sovits")
+            return FakeResponse(b"ok")
+        if "/set_gpt_weights" in url:
+            loaded["gpt"] = parse_qs(urlsplit(url).query)["weights_path"][0]
+            switched.append("gpt")
+            return FakeResponse(b"ok")
+        assert loaded == {"gpt": "D:/models/a.ckpt", "sovits": "D:/models/a.pth"}
+        return FakeResponse(b"mock-audio")
+
+    monkeypatch.setattr(backend.urllib.request, "urlopen", fake_urlopen)
+    profile = managed_profile()
+    assert backend.synthesize("Before restart", 1.0, profile) == b"mock-audio"
+
+    # Simulate actual backend process death/restart, not CVS module reload.
+    loaded.update(gpt=None, sovits=None)
+    assert backend.synthesize("After restart", 1.0, profile) == b"mock-audio"
+    assert switched == ["sovits", "gpt", "sovits", "gpt"]
+
+
+def test_upstream_failure_leaves_ambiguous_inference_receipt_and_refuses_replay(monkeypatch):
+    from pathlib import Path
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append(request)
+        if isinstance(request, str):
+            return FakeResponse(b"ok")
+        raise TimeoutError("unknown backend inference outcome")
+
+    monkeypatch.setattr(backend.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(HTTPException) as first:
+        backend.synthesize("Potentially still running", 1.0, managed_profile())
+    assert first.value.status_code == 503
+    receipt_files = list((backend.DATA_DIR / "inference-transactions").glob("*.pending.json"))
+    assert len(receipt_files) == 1
+    count_after_first = len(calls)
+
+    with pytest.raises(HTTPException) as second:
+        backend.synthesize("MUST NOT SWITCH", 1.0, managed_profile("other", "b.ckpt", "b.pth"))
+    assert second.value.status_code == 503
+    assert "unresolved" in second.value.detail
+    assert len(calls) == count_after_first
+    assert receipt_files[0].exists()
