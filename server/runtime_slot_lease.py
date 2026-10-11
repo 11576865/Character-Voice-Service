@@ -55,7 +55,7 @@ def acquire_runtime_slot(group: str, directory: Path) -> RuntimeSlotLease | None
         if os.name == "nt":
             file.seek(0, os.SEEK_END)
             if file.tell() == 0:
-                file.write(b"\\0")
+                file.write(b"\0")
                 file.flush()
         file.seek(0)
         try:
