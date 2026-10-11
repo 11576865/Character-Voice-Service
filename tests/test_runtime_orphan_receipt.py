@@ -68,6 +68,9 @@ def test_live_engine_receipt_blocks_new_parent_after_lock_owner_exits(tmp_path):
         recovered_lease.release()
         with pytest.raises(RuntimeConflictError, match="ownership unresolved"):
             supervisor.start("engine")
+        status = supervisor.status("engine")
+        assert status["status"] == "ownership-unresolved"
+        assert status["owner_receipt"]["pid"] == os.getpid()
         record = receipt.read_receipt("gpu0", root)
         assert record["launch_id"] == launch
         assert record["pid"] == os.getpid()
@@ -96,6 +99,9 @@ def test_corrupt_or_unrecognized_receipt_never_permits_launch(tmp_path):
     path.write_text('{"schema_version": 99}', encoding="utf-8")
     with pytest.raises(RuntimeConflictError, match="unsupported runtime owner receipt"):
         supervisor.start("engine")
+    state = supervisor.status("engine")
+    assert state["status"] == "ownership-unresolved"
+    assert state["owner_receipt"]["state"] == "unreadable"
     assert path.exists()
 
 
