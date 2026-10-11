@@ -75,7 +75,17 @@ def synthesize(text: str, speed: float, profile: dict) -> bytes:
             # Only a completed synthesis response retires the durable
             # in-flight evidence. Timeouts, connection drops and abnormal
             # controller termination must not assume GPU work has stopped.
-            audio = adapter.synthesize(text, speed, profile)
+            try:
+                audio = adapter.synthesize(text, speed, profile)
+            except HTTPException as exc:
+                # Built-in adapter 400/409 responses are deterministic local
+                # validation/model-mode refusals, before any TTS HTTP request
+                # is submitted. They cannot represent an in-flight GPU job.
+                # Upstream HTTP errors are translated to 502/503 and retain
+                # the conservative pending receipt for operator review.
+                if admission and request_id and exc.status_code in {400, 409}:
+                    admission.finish_inference(request_id)
+                raise
             if admission and request_id:
                 admission.finish_inference(request_id)
             return audio
