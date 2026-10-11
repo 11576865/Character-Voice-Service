@@ -191,9 +191,9 @@ def _begin_transaction(receipt: Path, *, tts_url: str, model: dict) -> str:
     }
     stage = receipt.with_name(receipt.name + "." + request_id + ".tmp")
     try:
-        with stage.open("x", encoding="utf-8", newline="\\n") as stream:
+        with stage.open("x", encoding="utf-8", newline="\n") as stream:
             json.dump(intent, stream, ensure_ascii=False, sort_keys=True)
-            stream.write("\\n")
+            stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(stage, receipt)
