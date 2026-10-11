@@ -234,3 +234,47 @@ def _check_refusal(root, seen):
             seen.append("unexpected")
     except RuntimeGroupBusy:
         seen.append("busy")
+
+
+def test_rejected_local_request_does_not_permanently_poison_gpu_group(tmp_path, monkeypatch):
+    supervisor, _, slot_dir = _setup(tmp_path)
+    monkeypatch.setattr(engines, "runtime_supervisor", supervisor)
+
+    class InvalidInputAdapter:
+        def synthesize(self, text, speed, profile):
+            raise HTTPException(status_code=400, detail="invalid speed")
+
+    monkeypatch.setattr(engines, "get_adapter", lambda key: InvalidInputAdapter())
+    profile = {"selected_model": {"engine": "engine"}}
+    try:
+        supervisor.start("engine")
+        with pytest.raises(HTTPException) as exc:
+            engines.synthesize("A", 0, profile)
+        assert exc.value.status_code == 400
+        _, _, receipt = _scope("gpu0", slot_dir)
+        assert not receipt.exists()
+        # A locally rejected request must not disable future lifecycle
+        # operations or require an operator to delete a stale marker.
+        assert supervisor.stop("engine")["status"] == "stopped"
+    finally:
+        supervisor.shutdown_all()
+
+
+def test_group_guard_allows_nested_start_before_synthesizing(tmp_path, monkeypatch):
+    supervisor, _, slot_dir = _setup(tmp_path)
+    monkeypatch.setattr(engines, "runtime_supervisor", supervisor)
+
+    class ImmediateAdapter:
+        def synthesize(self, text, speed, profile):
+            return b"fixture-audio"
+
+    monkeypatch.setattr(engines, "get_adapter", lambda key: ImmediateAdapter())
+    try:
+        assert engines.synthesize(
+            "A", 1.0, {"selected_model": {"engine": "engine"}}
+        ) == b"fixture-audio"
+        assert "engine" in supervisor._owned
+        _, _, receipt = _scope("gpu0", slot_dir)
+        assert not receipt.exists()
+    finally:
+        supervisor.shutdown_all()
