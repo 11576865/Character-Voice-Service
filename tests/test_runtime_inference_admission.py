@@ -1,10 +1,11 @@
-from wav_fixtures import make_pcm_wav
 """GPU group lifecycle and in-flight audio correctness contract.
 
 Disposable live HTTP managed engine and independent Python worker;
 no actual GPU or model weights are needed.
 """
 from __future__ import annotations
+
+from wav_fixtures import make_pcm_wav
 
 import hashlib
 import json
