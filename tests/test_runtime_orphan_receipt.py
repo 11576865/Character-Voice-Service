@@ -61,10 +61,11 @@ def test_live_engine_receipt_blocks_new_parent_after_lock_owner_exits(tmp_path):
         return launch
     launch = _with_group_lease(root, publish)
     try:
-        assert acquire_runtime_slot("gpu0", root) is not None
-        # Close the temporary lease: old owner no longer holds the slot.
-        temp = acquire_runtime_slot("gpu-other", root)
-        if temp: temp.release()
+        # The former parent's slot lease is no longer held, despite the
+        # surviving child identity in its durable receipt.
+        recovered_lease = acquire_runtime_slot("gpu0", root)
+        assert recovered_lease is not None
+        recovered_lease.release()
         with pytest.raises(RuntimeConflictError, match="ownership unresolved"):
             supervisor.start("engine")
         record = receipt.read_receipt("gpu0", root)
@@ -140,7 +141,9 @@ def test_startup_spawn_error_leaves_ambiguous_intent_for_next_supervisor(tmp_pat
         supervisor.start("engine")
     record = receipt.read_receipt("gpu0", root)
     assert record["state"] == "starting"
-    assert acquire_runtime_slot("gpu0", root) is not None
+    recovered_lease = acquire_runtime_slot("gpu0", root)
+    assert recovered_lease is not None
+    recovered_lease.release()
     second, _ = _supervisor(tmp_path)
     with pytest.raises(RuntimeConflictError, match="interrupted startup receipt"):
         second.start("engine")
