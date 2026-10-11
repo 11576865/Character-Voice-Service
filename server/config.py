@@ -4,6 +4,8 @@ import stat
 import time
 from pathlib import Path
 
+from server.runtime_slot_lease import acquire_runtime_slot
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VOICE_DIR = PROJECT_ROOT / "voices"
 DATA_DIR = Path(os.environ.get("CVS_DATA_DIR", str(PROJECT_ROOT / "data"))).expanduser()
@@ -36,32 +38,48 @@ def _admin_token() -> str:
     DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = DATA_DIR / "admin-token.txt"
 
-    # O_CREAT|O_EXCL selects one token publisher across independent CVS
-    # processes. The losing processes wait for that same complete token,
-    # rather than returning different secrets or overwriting the winner.
-    # On POSIX, 0600 is enforced even when the process umask is permissive.
-    for _ in range(100):
-        try:
-            descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            token = _read_private_admin_token(path)
-            if token:
-                return token
-            time.sleep(0.05)  # Another process may be fsyncing the new file.
+    # An OS-held lock covers BOTH publication AND readers. O_EXCL alone
+    # prevents overwrites, but a second process could observe partially
+    # written token bytes before the creator flushes and fsyncs them.
+    # This persistent lock file is never unlinked.
+    for _ in range(200):
+        lease = acquire_runtime_slot("admin-token", DATA_DIR)
+        if lease is None:
+            time.sleep(0.05)
             continue
+        try:
+            if path.exists() or path.is_symlink():
+                token = _read_private_admin_token(path)
+                if token:
+                    return token
+                raise RuntimeError(
+                    "CVS admin token initialization incomplete: empty admin-token.txt; "
+                    "inspect it before manual recovery"
+                )
 
-        generated = secrets.token_urlsafe(32)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(generated + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        return generated
+            # With the lock held, exactly one publisher may create this
+            # file. O_EXCL additionally rejects non-cooperating creators.
+            try:
+                descriptor = os.open(
+                    str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
+            except FileExistsError as exc:
+                raise RuntimeError(
+                    "CVS admin token appeared during locked initialization; "
+                    "refusing to read potentially incomplete credentials"
+                ) from exc
 
-    # An empty file can mean that the first creator crashed. Never
-    # silently replace a possibly committed credential with a new one.
+            generated = secrets.token_urlsafe(32)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(generated + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            return generated
+        finally:
+            lease.release()
+
     raise RuntimeError(
-        "CVS admin token initialization incomplete: empty admin-token.txt; "
-        "inspect it before manual recovery"
+        "CVS admin token initialization timed out waiting for bootstrap lock"
     )
 
 ADMIN_TOKEN = _admin_token()
