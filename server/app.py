@@ -2,6 +2,8 @@ import atexit
 import hashlib
 import hmac
 import json
+import math
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -71,7 +73,7 @@ def load_voice_profile(name: str) -> dict:
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail=f"Invalid voice profile JSON: {name}") from exc
     except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=500, detail=f"Invalid voice profile {name}: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"Invalid voice profile: {name}") from exc
 
 
 def _reference_revision(reference: dict | None) -> str | None:
@@ -128,7 +130,7 @@ def _resolve_speech_selection(request: SpeechRequest) -> dict:
             profile, model_id=request.model_id, reference_id=reference_id
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+        raise HTTPException(status_code=404, detail="requested model or reference not found") from exc
 
     selected_model = selection["selected_model"]
     selected_engine = str(selected_model.get("engine") or "gpt-sovits")
@@ -246,11 +248,36 @@ def health_live():
 
 @app.get("/health")
 def health():
+    # Backend health is untrusted external data: it can carry local paths,
+    # exception messages, arbitrary sidecar keys and request details. Public
+    # readiness exposes only bounded, established diagnostic fields.
     engines = []
     for item in list_engines():
         engine_id = item["engine"]
-        status = get_adapter(engine_id).health()
-        engines.append({"engine": engine_id, **status})
+        try:
+            observed = get_adapter(engine_id).health()
+        except Exception:
+            observed = {"status": "offline", "error": "backend health check failed"}
+        if not isinstance(observed, dict):
+            observed = {"status": "unknown"}
+        raw_status = observed.get("status")
+        status = (
+            raw_status.strip().lower()
+            if isinstance(raw_status, str) and re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,39}", raw_status.strip())
+            else "unknown"
+        )
+        public = {"engine": engine_id, "status": status}
+        if isinstance(observed.get("busy"), bool):
+            public["busy"] = observed["busy"]
+        seconds = observed.get("active_seconds")
+        if type(seconds) in {int, float} and math.isfinite(seconds) and 0 <= seconds <= 86400:
+            public["active_seconds"] = seconds
+        precision = observed.get("precision")
+        if isinstance(precision, str) and re.fullmatch(r"[A-Za-z0-9._+-]{1,32}", precision):
+            public["precision"] = precision
+        if "error" in observed or status in {"offline", "error", "unhealthy"}:
+            public["error"] = "backend health check failed"
+        engines.append(public)
     return {"status": "ok", "service": "character-voice-service", "engines": engines}
 
 
@@ -346,7 +373,9 @@ def models():
     try:
         return {"models": list_models()}
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=500, detail=f"Model Registry error: {exc}") from exc
+        # Public discovery must not reflect absolute registry paths or
+        # manifest contents from filesystem/parsing exceptions.
+        raise HTTPException(status_code=500, detail="Model Registry unavailable") from exc
 
 
 @app.post("/v1/admin/models/sync", dependencies=[Depends(require_admin)])
