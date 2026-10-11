@@ -254,3 +254,54 @@ def test_internal_receipt_never_appears_as_top_level_external_command(tmp_path):
     assert len(_commands(root)) == 1
     assert len(list((root / ".cvs-activation-state").glob("*.pending.json"))) == 1
     assert not any("pending" in p.name for p in root.glob("*.json"))
+
+
+def test_ensure_ready_recovers_late_external_activation_without_republishing(tmp_path, monkeypatch):
+    sup, spec, root = _external(tmp_path)
+    lock = acquire_activation_lease(root, "IndexTTS")
+    assert lock is not None
+    try:
+        request = publish_activation(root, "IndexTTS", "index-tts")
+    finally:
+        lock.release()
+
+    monkeypatch.setattr(sup, "_health", lambda spec, timeout=1.5: (True, None))
+    ready = sup.ensure_ready("index-tts")
+    assert ready["ready"] is True
+    assert pending_activation(root, "IndexTTS") is None
+    assert ready["external_activation"] is None
+    assert len(_commands(root)) == 1
+
+
+def test_admin_diagnostics_expose_pending_external_activation_without_claiming_ready(tmp_path, monkeypatch):
+    sup, spec, root = _external(tmp_path)
+    lock = acquire_activation_lease(root, "IndexTTS")
+    assert lock is not None
+    try:
+        request = publish_activation(root, "IndexTTS", "index-tts")
+    finally:
+        lock.release()
+    monkeypatch.setattr(sup, "_health", lambda spec, timeout=1.5: (False, "offline"))
+    diagnostic = sup.status("index-tts")
+    assert diagnostic["ready"] is False
+    assert diagnostic["status"] == "external-activation-pending"
+    assert diagnostic["external_activation"]["request_id"] == request["request_id"]
+    assert diagnostic["external_activation"]["state"] == "pending"
+
+
+def test_corrupt_activation_receipt_remains_visible_to_admin(tmp_path, monkeypatch):
+    sup, spec, root = _external(tmp_path)
+    lock = acquire_activation_lease(root, "IndexTTS")
+    assert lock is not None
+    try:
+        publish_activation(root, "IndexTTS", "index-tts")
+    finally:
+        lock.release()
+    path = next((root / ".cvs-activation-state").glob("*.pending.json"))
+    path.write_text("invalid-json", encoding="utf-8")
+    monkeypatch.setattr(sup, "_health", lambda spec, timeout=1.5: (False, "offline"))
+    state = sup.status("index-tts")
+    assert state["ready"] is False
+    assert state["status"] == "external-activation-unresolved"
+    assert state["external_activation"]["state"] == "unreadable"
+    assert len(_commands(root)) == 1
