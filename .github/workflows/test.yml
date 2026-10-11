@@ -20,6 +20,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test IndexTTS hang containment and runtime diagnostics
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pytest -q tests/test_index_tts_hang_recovery.py tests/test_index_tts_sidecar.py tests/test_index_tts.py tests/test_runtime_supervisor.py
       - name: Parse PowerShell scripts with Windows PowerShell 5.1
         shell: powershell
         run: |
