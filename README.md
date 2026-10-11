@@ -91,3 +91,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 托管引擎进程树隔离
 
 [Managed runtime process-tree containment v1](docs/runtime-process-tree-containment-v1.md) 针对配置 `exclusive_group` 的托管引擎，使用 Linux/POSIX 独立会话与进程组、Windows kill-on-close Job Object 包装器，在停止时清理后代进程。直接 PID 意外退出但后代仍存活时保留 GPU 租约和所有权记录，拒绝自动接管。真实 GPU、逃逸子进程与外部 System Supervisor 仍需单独验证。
+
+## CVS 控制进程异常终止的恢复验证
+
+[Controller crash fault injection v1](docs/runtime-parent-crash-fault-injection-v1.md) 使用独立 Python 解释器、真实子进程树与强制终止，验证 CVS 父进程死亡后旧引擎仍存活时，新实例不会因为 GPU 组文件锁已释放就重复启动；同时验证启动意图中断与 Linux `/proc` 权限不可读时的失败封闭行为。该测试不代表真实 GPU 或外部 System Supervisor 的验收。
