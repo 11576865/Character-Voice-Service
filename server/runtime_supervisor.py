@@ -419,7 +419,12 @@ class RuntimeSupervisor:
             if not spec.enabled:
                 raise RuntimeSupervisorError(f"runtime is disabled: {engine_id}")
 
-            ready, _ = self._health(spec)
+            # Reap a dead managed process before selecting health timeout:
+            # during restart backoff, do not spend multiple seconds waiting
+            # for a known-offline health endpoint on every client request.
+            self._clean_exited(engine_id)
+            remaining = self._restart_cooldown(engine_id) if spec.managed else 0.0
+            ready, _ = self._health(spec, timeout=0.2 if remaining > 0 else 1.5)
             if ready:
                 return self.status(engine_id)
             if not spec.managed:
@@ -427,12 +432,10 @@ class RuntimeSupervisor:
                     f"{engine_id} is external-only and is not currently healthy"
                 )
 
-            self._clean_exited(engine_id)
             owned = self._owned.get(engine_id)
             if owned and owned.process.poll() is None:
                 return self.status(engine_id)
 
-            remaining = self._restart_cooldown(engine_id)
             if remaining > 0:
                 raise RuntimeSupervisorError(
                     f"{engine_id}: restart backoff active for {remaining:.1f}s "
@@ -584,6 +587,11 @@ class RuntimeSupervisor:
             # Backward compatibility: an unregistered engine may still be managed
             # manually, exactly as before Runtime Registry was introduced.
             return None
+
+        # Keep cooldown requests on the short health-probe path in start()
+        # rather than accumulating the default 1.5s wait per request here.
+        if spec.managed and spec.start_on_demand and self._restart_cooldown(engine_id) > 0:
+            return self.start(engine_id)
 
         ready, _ = self._health(spec)
         if ready:
