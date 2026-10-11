@@ -45,3 +45,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ```
 
 运行时状态可通过受管理员令牌保护的 `GET /v1/runtime` 查看（请求头 `X-CVS-Token`）。已登记且启用 `start_on_demand` 的引擎会在首次请求时由 Runtime Supervisor 使用各自的 Python 绝对路径启动。
+
+## IndexTTS 推理卡死隔离
+
+[IndexTTS hang containment v1](docs/indextts-hang-containment-v1.md) 为单模型推理加上了忙碌时快速拒绝、健康状态中的运行时长、可配置的 240 秒默认推理看门狗，以及超限时的独立 Sidecar 进程级恢复。它不是细粒度取消接口；真实 GPU/系统监督器恢复仍需验收。
