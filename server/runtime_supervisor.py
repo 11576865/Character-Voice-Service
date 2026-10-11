@@ -323,6 +323,23 @@ class RuntimeSupervisor:
             if spec.managed and state == "stopped" and cooldown > 0:
                 state = "restart-backoff"
 
+            # A durable receipt can outlive the parent that created it.
+            # Surface unresolved evidence without claiming GPU hardware state.
+            owner_receipt = None
+            if spec.managed and spec.exclusive_group and not process_running:
+                try:
+                    old = read_receipt(spec.exclusive_group, self._slot_dir)
+                    if old is not None:
+                        owner_receipt = {
+                            "state": old["state"],
+                            "engine_id": old.get("engine_id"),
+                            "pid": old.get("pid"),
+                        }
+                except UncertainRuntimeOwner as exc:
+                    owner_receipt = {"state": "unreadable", "reason": str(exc)}
+                if owner_receipt and not ready and state in {"stopped", "restart-backoff"}:
+                    state = "ownership-unresolved"
+
             external = self._external_supervisor_status(spec) if not spec.managed else None
             external_pid = external.get("pid") if external else None
             external_state = str(external.get("supervisor_state") or "") if external else ""
@@ -355,6 +372,7 @@ class RuntimeSupervisor:
                 "restart_failures": self._failures.get(engine_id, {}).get("count", 0),
                 "restart_backoff_seconds": round(cooldown, 2),
                 "last_start_failure": self._failures.get(engine_id, {}).get("reason"),
+                "owner_receipt": owner_receipt,
             }
 
         finally:
