@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -114,14 +115,21 @@ class Stalled:
         time.sleep(10)
 api.infer_with_watchdog(Stalled(), {}, request_id="timeout-fixture", deadline=0.05)
 """
-    result = subprocess.run(
-        [sys.executable, "-c", source],
-        cwd=str(Path(__file__).resolve().parents[1]),
-        capture_output=True, text=True, timeout=4,
-    )
-    assert result.returncode == 124
-    assert "aborting sidecar process" in result.stdout
-    assert "timeout-fixture" in result.stdout
+    # Windows can keep a captured child pipe readable after process exit
+    # if another inherited handle remains open. The contract here is the
+    # CHILD EXIT status, so record its logs to a regular file and wait on
+    # the process handle rather than waiting for PIPE EOF.
+    with tempfile.TemporaryFile(mode="w+b") as log:
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            stdout=log, stderr=subprocess.STDOUT, timeout=8,
+        )
+        log.seek(0)
+        output = log.read().decode("utf-8", errors="replace")
+    assert result.returncode == 124, output
+    assert "aborting sidecar process" in output
+    assert "timeout-fixture" in output
 
 
 def test_inference_watchdog_does_not_kill_completed_child_process():
@@ -135,13 +143,16 @@ api.infer_with_watchdog(Completed(), {}, request_id="completed", deadline=0.1)
 time.sleep(0.16)
 print("still-alive", flush=True)
 """
-    result = subprocess.run(
-        [sys.executable, "-c", source],
-        cwd=str(Path(__file__).resolve().parents[1]),
-        capture_output=True, text=True, timeout=4,
-    )
-    assert result.returncode == 0
-    assert "still-alive" in result.stdout
+    with tempfile.TemporaryFile(mode="w+b") as log:
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            stdout=log, stderr=subprocess.STDOUT, timeout=8,
+        )
+        log.seek(0)
+        output = log.read().decode("utf-8", errors="replace")
+    assert result.returncode == 0, output
+    assert "still-alive" in output
 
 
 @pytest.mark.parametrize("value", ["abc", "-1", "nan", "inf", "281", "0.5"])
