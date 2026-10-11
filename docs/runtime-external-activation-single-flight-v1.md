@@ -109,7 +109,7 @@ injection tests.
 
 ## Automated evidence
 
-`tests/test_runtime_external_activation.py` contains 14 tests for
+`tests/test_runtime_external_activation.py` contains 15 tests for
 pending-before-command publication, concurrent callers, timeout
 replay suppression, late healthy recovery, corrupt pending state,
 per-service lock scope, configuration validation, stale Supervisor
