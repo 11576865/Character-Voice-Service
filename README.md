@@ -95,3 +95,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## CVS 控制进程异常终止的恢复验证
 
 [Controller crash fault injection v1](docs/runtime-parent-crash-fault-injection-v1.md) 使用独立 Python 解释器、真实子进程树与强制终止，验证 CVS 父进程死亡后旧引擎仍存活时，新实例不会因为 GPU 组文件锁已释放就重复启动；同时验证启动意图中断与 Linux `/proc` 权限不可读时的失败封闭行为。该测试不代表真实 GPU 或外部 System Supervisor 的验收。
+
+## 外部 System Supervisor 文件协议端到端测试
+
+[External file-bridge consumer contract E2E v1](docs/runtime-external-consumer-contract-e2e-v1.md) 通过独立 Python 消费者进程，验证 CVS 发布激活命令、消费者启动 HTTP 健康端点、请求去重、超时后恢复，以及 CVS 控制进程异常终止后的待确认记录恢复。它是**模拟消费者的跨进程协议验收**，不是已安装 System Supervisor 或真实 GPU 的现场测试。
