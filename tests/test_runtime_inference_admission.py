@@ -5,6 +5,8 @@ no actual GPU or model weights are needed.
 """
 from __future__ import annotations
 
+from wav_fixtures import make_pcm_wav
+
 import hashlib
 import json
 import os
@@ -164,7 +166,7 @@ def test_real_engines_synthesis_holds_group_admission_through_audio_return(tmp_p
         def synthesize(self, text, speed, profile):
             begun.set()
             assert release.wait(timeout=9)
-            return b"simulated-audio"
+            return make_pcm_wav()
 
     monkeypatch.setattr(engines, "get_adapter", lambda key: SlowAdapter())
     profile = {"selected_model": {"engine": "engine"}}
@@ -191,7 +193,7 @@ def test_real_engines_synthesis_holds_group_admission_through_audio_return(tmp_p
             thread.join(timeout=12)
         assert not thread.is_alive()
         assert "error" not in results, results
-        assert results["audio"] == b"simulated-audio"
+        assert results["audio"] == make_pcm_wav()
         assert not receipt.exists()
         supervisor.stop("engine")
     finally:
@@ -266,13 +268,13 @@ def test_group_guard_allows_nested_start_before_synthesizing(tmp_path, monkeypat
 
     class ImmediateAdapter:
         def synthesize(self, text, speed, profile):
-            return b"fixture-audio"
+            return make_pcm_wav()
 
     monkeypatch.setattr(engines, "get_adapter", lambda key: ImmediateAdapter())
     try:
         assert engines.synthesize(
             "A", 1.0, {"selected_model": {"engine": "engine"}}
-        ) == b"fixture-audio"
+        ) == make_pcm_wav()
         assert "engine" in supervisor._owned
         _, _, receipt = _scope("gpu0", slot_dir)
         assert not receipt.exists()

@@ -1,3 +1,4 @@
+from wav_fixtures import make_pcm_wav
 import json
 
 from server.engines import index_tts
@@ -8,8 +9,8 @@ class FakeResponse:
         self._body = body
         self.headers = {"Content-Type": content_type}
 
-    def read(self):
-        return self._body
+    def read(self, size=-1):
+        return self._body if size < 0 else self._body[:size]
 
     def __enter__(self):
         return self
@@ -24,7 +25,7 @@ def test_index_tts_adapter_sends_resolved_reference(monkeypatch):
     def fake_urlopen(request, timeout=0):
         captured["request"] = request
         captured["timeout"] = timeout
-        return FakeResponse(b"RIFF....WAVE")
+        return FakeResponse(make_pcm_wav())
 
     monkeypatch.setattr(index_tts.urllib.request, "urlopen", fake_urlopen)
 
@@ -40,7 +41,7 @@ def test_index_tts_adapter_sends_resolved_reference(monkeypatch):
     )
 
     payload = json.loads(captured["request"].data.decode("utf-8"))
-    assert audio == b"RIFF....WAVE"
+    assert audio == make_pcm_wav()
     assert payload["speaker_audio"] == "D:/refs/march.wav"
     assert payload["lang"] == "en"
     assert payload["duration_factor"] == 0.8

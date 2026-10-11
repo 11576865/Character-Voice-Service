@@ -115,3 +115,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 推理中的 GPU 组生命周期保护
 
 [GPU group in-flight lifecycle guard v1](docs/runtime-gpu-group-inflight-guard-v1.md) 将同组引擎的**推理进入**与**启动、停止、重启及自动切换**放在同一跨进程活动锁下。若旧引擎仍有推理正在进行，同组新引擎的生命周期操作会明确拒绝，而不是中途终止旧引擎。CVS 异常退出时，持久化推理记录阻止盲目接管，直到运维人员根据后端实际状态确认恢复。该机制要求各 CVS 实例共享 Runtime Registry 中的 `exclusive_group` 及同一数据目录；不代表真实 GPU、非协作进程或音频有效性已经验收。
+
+## WAV 音频完整性验收
+
+[Speech WAV output integrity v1](docs/speech-wav-output-integrity-v1.md) 对 GPT-SoVITS、IndexTTS、通用 Sidecar 的合成结果使用统一的 RIFF/WAVE 与 PCM／浮点采样帧验证，禁止将错误 JSON、HTML、伪造 WAV 头或截断文件标注成成功音频。上游单次音频读取限制为 **128 MiB**，时长限制 **15 分钟**；有效 WAV 才能保存并返回 `audio/wav`。此验收仅证明音频容器结构，不证明实际模型／角色声音身份或真实 GPU 运行质量。

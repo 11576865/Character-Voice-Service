@@ -6,6 +6,8 @@ from server.engines.index_tts import IndexTTSAdapter
 from server.engines.sidecar import SidecarV1Adapter
 from fastapi import HTTPException
 
+from server.audio_validation import InvalidWav, validate_wav_bytes
+
 from server.runtime_inference_admission import RuntimeGroupAdmissionError, runtime_group_guard
 from server.runtime_supervisor import runtime_supervisor
 
@@ -96,7 +98,16 @@ def synthesize(text: str, speed: float, profile: dict) -> bytes:
                 raise
             if admission and request_id:
                 admission.finish_inference(request_id)
-            return audio
+            # A finished upstream response is not an unresolved GPU request,
+            # even when it contains invalid audio. Retire the receipt first,
+            # then reject the corrupt bytes without a successful result.
+            try:
+                return validate_wav_bytes(audio)
+            except InvalidWav as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"{engine_id}: invalid upstream WAV: {exc}",
+                ) from exc
     except RuntimeGroupAdmissionError as exc:
         raise HTTPException(
             status_code=503,

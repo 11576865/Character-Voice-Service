@@ -6,6 +6,7 @@ import urllib.request
 
 from fastapi import HTTPException
 
+from server.audio_validation import InvalidWav, read_bounded_wav_candidate
 from server.engine_registry import EngineDescriptor
 from server.runtime_registry import runtime_base_url
 
@@ -134,7 +135,9 @@ class SidecarV1Adapter:
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 content_type = response.headers.get("Content-Type", "")
-                audio = response.read()
+                audio = read_bounded_wav_candidate(response)
+        except InvalidWav as exc:
+            raise HTTPException(status_code=502, detail=f"{self.engine_id} {exc}") from exc
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise HTTPException(
