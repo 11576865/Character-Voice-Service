@@ -134,6 +134,13 @@ def runtime_group_guard(group: str | None, directory: Path) -> Iterator[RuntimeG
         _local.held = held
     current = held.get(key)
     if current is not None:
+        # Nested managed start during ensure_ready is legal BEFORE
+        # begin_inference. Once backend work has been admitted, not even
+        # a same-thread callback may stop/switch that engine.
+        if current._active_request is not None:
+            raise RuntimeGroupBusy(
+                f"{group}: active inference cannot be interrupted by a nested lifecycle operation"
+            )
         yield current
         return
 
