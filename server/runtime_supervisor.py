@@ -667,6 +667,12 @@ class RuntimeSupervisor:
         try:
             ready, _ = self._health(spec)
             pending = pending_activation(request_dir, service_key)
+            if pending and pending["engine_id"] != spec.engine_id:
+                raise RuntimeConflictError(
+                    f"{spec.engine_id}: external service_key={service_key} has "
+                    f"a pending request for another engine {pending['engine_id']}; "
+                    "refusing to clear or replace its activation"
+                )
             if ready:
                 if pending:
                     acknowledge_activation(
