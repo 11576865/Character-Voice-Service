@@ -229,7 +229,9 @@ class RuntimeSupervisor:
             external = self._external_supervisor_status(spec) if not spec.managed else None
             external_pid = external.get("pid") if external else None
             external_state = str(external.get("supervisor_state") or "") if external else ""
-            if external_state:
+            if external_state and not (ready and health_error == "busy"):
+                # The live sidecar's in-flight state is newer/more specific
+                # than an asynchronously updated external supervisor receipt.
                 state = external_state.lower().replace(" ", "-")
 
             return {
