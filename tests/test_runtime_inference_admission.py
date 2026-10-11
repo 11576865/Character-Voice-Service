@@ -278,3 +278,15 @@ def test_group_guard_allows_nested_start_before_synthesizing(tmp_path, monkeypat
         assert not receipt.exists()
     finally:
         supervisor.shutdown_all()
+
+
+def test_same_thread_cannot_reenter_lifecycle_during_active_inference(tmp_path):
+    root = tmp_path / "slots"
+    with runtime_group_guard("gpu0", root) as admission:
+        request = admission.begin_inference("engine")
+        with pytest.raises(RuntimeGroupBusy, match="active inference cannot be interrupted"):
+            with runtime_group_guard("gpu0", root):
+                pass
+        admission.finish_inference(request)
+    with runtime_group_guard("gpu0", root):
+        pass
