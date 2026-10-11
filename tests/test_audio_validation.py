@@ -72,9 +72,12 @@ def test_rejects_wrong_riff_length_even_if_wave_header_looks_valid():
 
 
 def test_rejects_partial_pcm_frame_and_empty_audio():
-    raw = make_pcm_wav(frames=3)
+    raw = bytearray(make_pcm_wav(frames=3))
+    # Keep an even-length RIFF chunk with a 5-byte PCM data section
+    # and one padding byte. The declared data length is not frame-aligned.
+    struct.pack_into("<I", raw, raw.index(b"data") + 4, 5)
     with pytest.raises(InvalidWav, match="no complete audio frames"):
-        validate_wav_bytes(_replace_size(bytearray(raw[:-1])))
+        validate_wav_bytes(bytes(raw))
     empty = make_pcm_wav(frames=0)
     with pytest.raises(InvalidWav, match="no complete audio frames"):
         validate_wav_bytes(empty)
