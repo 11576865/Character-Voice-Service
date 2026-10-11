@@ -82,7 +82,11 @@ HTTPServer(("127.0.0.1", int(os.environ["TEST_PORT"])), Handler).serve_forever()
 """
 
 
-def test_crashed_engine_is_observable_and_does_not_restart_for_each_request(tmp_path):
+def test_crashed_engine_is_observable_and_does_not_restart_for_each_request(tmp_path, monkeypatch):
+    # This test checks *refusal while in cooldown*, not the five-second
+    # passage of real Windows CI wall time. A separate pure policy test
+    # verifies the actual default 5/10/20/40/60s backoff sequence.
+    monkeypatch.setattr("server.runtime_supervisor.CRASH_BACKOFF_BASE_SECONDS", 60.0)
     supervisor, script, attempts = _runtime(tmp_path, _CRASH)
     with pytest.raises(RuntimeSupervisorError, match="exited during startup with code 17"):
         supervisor.ensure_ready("test-engine")
@@ -212,3 +216,39 @@ def test_spawn_oserror_is_classified_and_backed_off(tmp_path, monkeypatch):
     assert state["last_exit"] is None
     with pytest.raises(RuntimeSupervisorError, match="restart backoff active"):
         supervisor.start("test-engine")
+
+
+def test_cooldown_request_uses_bounded_probe_without_full_health_timeout(tmp_path, monkeypatch):
+    supervisor, script, attempts = _runtime(tmp_path, _CRASH)
+    monkeypatch.setattr("server.runtime_supervisor.CRASH_BACKOFF_BASE_SECONDS", 60.0)
+    with pytest.raises(RuntimeSupervisorError, match="exited during startup"):
+        supervisor.ensure_ready("test-engine")
+
+    probe_timeouts = []
+
+    def fake_health(spec, timeout=1.5):
+        probe_timeouts.append(timeout)
+        return False, "offline"
+
+    monkeypatch.setattr(supervisor, "_health", fake_health)
+    with pytest.raises(RuntimeSupervisorError, match="restart backoff active"):
+        supervisor.ensure_ready("test-engine")
+    assert probe_timeouts == [0.2]
+    assert attempts.read_text(encoding="utf-8").splitlines() == ["start"]
+
+
+def test_cooldown_still_recognizes_healthy_external_endpoint(tmp_path, monkeypatch):
+    supervisor, script, attempts = _runtime(tmp_path, _CRASH)
+    with pytest.raises(RuntimeSupervisorError, match="exited during startup"):
+        supervisor.ensure_ready("test-engine")
+    # A healthy endpoint may have been taken over by a separately managed
+    # server. Circuit breaker must not misreport that existing server offline.
+    timeouts = []
+    def healthy(spec, timeout=1.5):
+        timeouts.append(timeout)
+        return True, None
+    monkeypatch.setattr(supervisor, "_health", healthy)
+    result = supervisor.ensure_ready("test-engine")
+    assert result["ready"] is True
+    assert timeouts[0] == 0.2
+    assert attempts.read_text(encoding="utf-8").splitlines() == ["start"]
