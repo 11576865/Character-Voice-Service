@@ -159,3 +159,93 @@ def test_external_runtime_activation_writes_supervisor_request(tmp_path, monkeyp
     assert payload["action"] == "activate-engine"
     assert payload["engine_id"] == "index-tts"
     assert payload["service_key"] == "IndexTTS"
+
+
+def test_health_parses_busy_without_marking_engine_offline(tmp_path, monkeypatch):
+    path = tmp_path / "registry.json"
+    script = tmp_path / "serve.py"
+    write_http_server(script)
+    write_registry(path, "test-engine", free_port(), script)
+    spec = load_runtime_registry(path).get("test-engine")
+
+    class Response:
+        headers = {"Content-Type": "application/json"}
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self, size):
+            return b'{"status":"busy","busy":true,"active_seconds":3}'
+
+    monkeypatch.setattr(
+        "server.runtime_supervisor.urllib.request.urlopen",
+        lambda request, timeout: Response(),
+    )
+    assert RuntimeSupervisor._health(spec) == (True, "busy")
+    supervisor = RuntimeSupervisor(registry_path=path, log_dir=tmp_path / "logs")
+    result = supervisor.status("test-engine")
+    assert result["status"] == "busy"
+    assert result["ready"] is True
+    assert result["busy"] is True
+    # A busy engine is already online: do not launch a second process.
+    assert supervisor.ensure_ready("test-engine")["status"] == "busy"
+
+
+def test_health_rejects_a_stopping_sidecar_even_when_http_returns_200(tmp_path, monkeypatch):
+    path = tmp_path / "registry.json"
+    script = tmp_path / "serve.py"
+    write_http_server(script)
+    write_registry(path, "test-engine", free_port(), script)
+    spec = load_runtime_registry(path).get("test-engine")
+
+    class Response:
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self, size):
+            return b'{"status":"stopping"}'
+
+    monkeypatch.setattr(
+        "server.runtime_supervisor.urllib.request.urlopen",
+        lambda request, timeout: Response(),
+    )
+    healthy, reason = RuntimeSupervisor._health(spec)
+    assert healthy is False
+    assert "stopping" in reason
+
+
+def test_status_and_diagnostics_do_not_wait_for_long_lifecycle_lock(tmp_path):
+    import threading
+    import time
+
+    path = tmp_path / "registry.json"
+    script = tmp_path / "serve.py"
+    write_http_server(script)
+    write_registry(path, "test-engine", free_port(), script)
+    supervisor = RuntimeSupervisor(registry_path=path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def simulate_slow_startup():
+        with supervisor._lock:
+            entered.set()
+            release.wait(timeout=5)
+
+    worker = threading.Thread(target=simulate_slow_startup)
+    worker.start()
+    try:
+        assert entered.wait(timeout=2)
+        start = time.monotonic()
+        status = supervisor.status("test-engine")
+        diagnostic = supervisor.diagnostics()
+        assert time.monotonic() - start < 1.0
+        assert status["status"] == "supervisor-transition"
+        assert status["ready"] is False
+        assert status["supervisor_busy"] is True
+        assert diagnostic["runtimes"][0]["status"] == "supervisor-transition"
+    finally:
+        release.set()
+        worker.join(timeout=3)
+    assert not worker.is_alive()

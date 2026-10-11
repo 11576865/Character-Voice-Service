@@ -40,6 +40,9 @@ class IndexTTSAdapter:
                 "status": payload.get("status", "ready"),
                 "model": payload.get("model", "IndexTTS-2.5"),
                 "precision": payload.get("precision"),
+                "busy": payload.get("busy", False),
+                "active_seconds": payload.get("active_seconds"),
+                "active_request_id": payload.get("active_request_id"),
             }
         except Exception as exc:
             return {"status": "offline", "error": str(exc)}
@@ -108,8 +111,13 @@ class IndexTTSAdapter:
                 audio = response.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            # Preserve the sidecar's retryable busy response. Treating it as
+            # 502 obscures the actual single-inference admission boundary.
+            overloaded = exc.code in {429, 503}
             raise HTTPException(
-                status_code=502, detail=f"IndexTTS synthesis failed: {detail}"
+                status_code=503 if overloaded else 502,
+                detail=f"IndexTTS synthesis failed: {detail}",
+                headers={"Retry-After": "2"} if overloaded else None,
             ) from exc
         except Exception as exc:
             raise HTTPException(

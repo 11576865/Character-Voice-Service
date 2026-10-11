@@ -67,3 +67,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## Model Registry 并发事务
 
 [Model Registry transaction boundary v1](docs/model-registry-transactions-v1.md) 使用跨进程系统文件锁，将扫描、生命周期状态修改、模型晋升和退休操作的完整「读取—修改—持久化」过程串行化。锁文件不应人工删除。此机制防止协作进程的丢失更新，但不替代受控模型目录、完整性检查或数据库事务。
+
+## IndexTTS 推理卡死隔离
+
+[IndexTTS hang containment v1](docs/indextts-hang-containment-v1.md) 为单模型推理加上了忙碌时快速拒绝、健康状态中的运行时长、可配置的 240 秒默认推理看门狗，以及超限时的独立 Sidecar 进程级恢复。它不是细粒度取消接口；真实 GPU/系统监督器恢复仍需验收。

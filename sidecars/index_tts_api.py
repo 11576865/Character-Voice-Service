@@ -10,14 +10,18 @@ Environment variables:
   INDEX_TTS_PORT            default: 9882
   INDEX_TTS_USE_BF16        default: 1
   INDEX_TTS_USE_QWEN_EMO    default: 0
+  INDEX_TTS_INFER_DEADLINE_SECONDS default: 240 (1..280, 0 disables)
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import threading
+import time
+import uuid
 import ipaddress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +41,70 @@ USE_QWEN_EMO = os.environ.get("INDEX_TTS_USE_QWEN_EMO", "0") == "1"
 SUPPORTED_LANGUAGES = {"zh", "en", "ja", "es", "ar"}
 _INFER_LOCK = threading.Lock()
 _SHUTDOWN_REQUESTED = threading.Event()
+_STATE_LOCK = threading.Lock()
+_ACTIVE_INFERENCE: dict | None = None
+
+
+def inference_deadline_seconds() -> float:
+    """Sidecar must abort stalled work before CVS' 300s HTTP timeout."""
+    raw = os.environ.get("INDEX_TTS_INFER_DEADLINE_SECONDS", "240")
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("INDEX_TTS_INFER_DEADLINE_SECONDS must be numeric") from exc
+    if not math.isfinite(seconds) or (seconds != 0 and not 1 <= seconds <= 280):
+        raise ValueError("INDEX_TTS_INFER_DEADLINE_SECONDS must be 0 or between 1 and 280")
+    return seconds
+
+
+def inference_state() -> dict:
+    with _STATE_LOCK:
+        active = dict(_ACTIVE_INFERENCE) if _ACTIVE_INFERENCE else None
+    return {
+        "busy": _INFER_LOCK.locked(),
+        "active_request_id": active["request_id"] if active else None,
+        "active_seconds": round(max(0.0, time.monotonic() - active["started"]), 2) if active else None,
+    }
+
+
+def _terminate_stalled_inference(request_id: str, deadline: float) -> None:
+    """A stuck native/GPU infer call cannot be safely cancelled in-process."""
+    # Ignore late timer callbacks after the tracked inference has already
+    # returned, or after a different request becomes the active owner.
+    with _STATE_LOCK:
+        active = _ACTIVE_INFERENCE
+        if not active or active["request_id"] != request_id:
+            return
+        if time.monotonic() - active["started"] < deadline:
+            return
+        print(
+            f"IndexTTS inference watchdog exceeded {deadline:g}s; "
+            f"aborting sidecar process, request_id={request_id}",
+            flush=True,
+        )
+        # Force-stop only this engine's dedicated process; Python threads
+        # cannot safely interrupt a hung native/GPU inference stack.
+        os._exit(124)
+
+
+def infer_with_watchdog(tts, kwargs: dict, *, request_id: str, deadline: float) -> None:
+    global _ACTIVE_INFERENCE
+    with _STATE_LOCK:
+        _ACTIVE_INFERENCE = {"request_id": request_id, "started": time.monotonic()}
+    timer = None
+    if deadline:
+        timer = threading.Timer(
+            deadline, _terminate_stalled_inference, args=(request_id, deadline),
+        )
+        timer.daemon = True
+        timer.start()
+    try:
+        tts.infer(**kwargs)
+    finally:
+        if timer:
+            timer.cancel()
+        with _STATE_LOCK:
+            _ACTIVE_INFERENCE = None
 
 
 def normalize_language(value: object) -> str:
@@ -95,11 +163,13 @@ class IndexTTSServer(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     server_version = "CVS-IndexTTS/0.2"
 
-    def json_response(self, status: int, payload: dict) -> None:
+    def json_response(self, status: int, payload: dict, *, retry_after: int | None = None) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        if retry_after is not None:
+            self.send_header("Retry-After", str(retry_after))
         self.end_headers()
         self.wfile.write(data)
 
@@ -109,7 +179,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response(
                 200,
                 {
-                    "status": "ready",
+                    "status": "busy" if _INFER_LOCK.locked() else "ready",
+                    **inference_state(),
                     "engine": "index-tts",
                     "model": "IndexTTS-2.5",
                     "precision": "bf16" if bool(getattr(tts, "use_bf16", False)) else "fp32",
@@ -214,14 +285,28 @@ class Handler(BaseHTTPRequestHandler):
                     "use_emo_text requires INDEX_TTS_USE_QWEN_EMO=1 at sidecar startup"
                 )
 
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
-                output_path = Path(handle.name)
-            kwargs["output_path"] = str(output_path)
-
-            with _INFER_LOCK:
-                self.server.tts.infer(**kwargs)
-
-            audio = output_path.read_bytes()
+            # A stalled native inference must not turn later requests into
+            # an unbounded FIFO of blocked HTTP handler threads.
+            if not _INFER_LOCK.acquire(blocking=False):
+                self.json_response(
+                    503,
+                    {"error": "IndexTTS is busy with another inference", "retryable": True,
+                     **inference_state()},
+                    retry_after=2,
+                )
+                return
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+                    output_path = Path(handle.name)
+                kwargs["output_path"] = str(output_path)
+                request_id = uuid.uuid4().hex
+                infer_with_watchdog(
+                    self.server.tts, kwargs, request_id=request_id,
+                    deadline=inference_deadline_seconds(),
+                )
+                audio = output_path.read_bytes()
+            finally:
+                _INFER_LOCK.release()
             if not audio:
                 raise RuntimeError("IndexTTS produced an empty WAV")
 
@@ -254,9 +339,11 @@ def main() -> int:
         raise SystemExit(f"IndexTTS config not found: {CONFIG_PATH}")
 
     print(f"Loading IndexTTS-2.5 from {MODEL_DIR}")
+    inference_deadline = inference_deadline_seconds()
     print(
         "Runtime policy: "
         f"bf16={USE_BF16}, qwen_emotion={USE_QWEN_EMO}, "
+        f"inference_deadline_seconds={inference_deadline:g}, "
         "cuda_kernel=False, deepspeed=False, max_concurrency=1"
     )
     tts = load_tts()

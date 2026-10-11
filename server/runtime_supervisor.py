@@ -57,7 +57,22 @@ class RuntimeSupervisor:
                 headers={"User-Agent": "Character-Voice-Service-Runtime-Supervisor/1"},
             )
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                response.read(128)
+                content_type = response.headers.get("Content-Type", "")
+                body = response.read(4096)
+            # Health endpoints can be responsive while the single inference
+            # slot is occupied. That is healthy but not idle/ready to admit
+            # another synthesis request.
+            if "application/json" in content_type.lower():
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except (UnicodeError, json.JSONDecodeError):
+                    payload = None
+                if isinstance(payload, dict):
+                    state = str(payload.get("status") or "").lower()
+                    if state == "busy":
+                        return True, "busy"
+                    if state in {"stopping", "failed", "unhealthy"}:
+                        return False, f"runtime health status: {state}"
             return True, None
         except Exception as exc:
             return False, str(exc)
@@ -182,7 +197,31 @@ class RuntimeSupervisor:
         return data[-limit:].decode("utf-8", errors="replace").strip()
 
     def status(self, engine_id: str) -> dict:
-        with self._lock:
+        # Startup can own the supervisor lock for minutes. A status/health
+        # request must never wait behind the entire startup deadline.
+        if not self._lock.acquire(blocking=False):
+            spec = self.registry().get(engine_id)
+            if spec is None:
+                return {
+                    "engine": engine_id, "configured": False,
+                    "status": "unconfigured", "managed_by_supervisor": False,
+                }
+            return {
+                "engine": engine_id,
+                "runtime_id": spec.runtime_id,
+                "runtime_revision": spec.configuration_revision,
+                "configured": True,
+                "enabled": spec.enabled,
+                "status": "supervisor-transition",
+                "ready": False,
+                "busy": False,
+                "supervisor_busy": True,
+                "managed_by_supervisor": False,
+                "endpoint": spec.endpoint,
+                "health_url": spec.health_url,
+                "health_error": "runtime lifecycle operation in progress",
+            }
+        try:
             registry = self.registry()
             spec = registry.get(engine_id)
             if spec is None:
@@ -198,7 +237,9 @@ class RuntimeSupervisor:
             ready, health_error = self._health(spec)
             process_running = bool(owned and owned.process.poll() is None)
 
-            if process_running and ready:
+            if ready and health_error == "busy":
+                state = "busy"
+            elif process_running and ready:
                 state = "ready"
             elif process_running:
                 state = "starting"
@@ -212,7 +253,9 @@ class RuntimeSupervisor:
             external = self._external_supervisor_status(spec) if not spec.managed else None
             external_pid = external.get("pid") if external else None
             external_state = str(external.get("supervisor_state") or "") if external else ""
-            if external_state:
+            if external_state and not (ready and health_error == "busy"):
+                # The live sidecar's in-flight state is newer/more specific
+                # than an asynchronously updated external supervisor receipt.
                 state = external_state.lower().replace(" ", "-")
 
             return {
@@ -225,6 +268,7 @@ class RuntimeSupervisor:
                 "lifecycle_owner": spec.lifecycle_owner,
                 "status": state,
                 "ready": ready,
+                "busy": bool(ready and health_error == "busy"),
                 "managed_by_supervisor": process_running,
                 "pid": owned.process.pid if process_running else external_pid,
                 "external_supervisor": external,
@@ -235,6 +279,9 @@ class RuntimeSupervisor:
                 "health_error": health_error if not ready else None,
                 "log_path": str(owned.log_path) if owned else None,
             }
+
+        finally:
+            self._lock.release()
 
     def diagnostics(self) -> dict:
         registry = self.registry()
