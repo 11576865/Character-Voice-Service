@@ -1,0 +1,44 @@
+{
+  "packet_version": 1,
+  "packet_id": "ci-11576865-Character-Voice-Service-38115872460-1",
+  "status": "pending",
+  "record_type": "ci_failure",
+  "title": "CVS tests: failure",
+  "summary": "Tracked CI workflow did not complete successfully. Source adapter captured failed job/step evidence when available.",
+  "source_repository": "11576865/Character-Voice-Service",
+  "source_event": "workflow_run",
+  "source_ref": "fix/indextts-inference-hang-admission-watchdog-v1",
+  "source_sha": "0d5e0bb70f4923eb40ea4554810c447d11ed51a5",
+  "source_url": "https://github.com/11576865/Character-Voice-Service/actions/runs/38115872460",
+  "created_at": "2026-10-11T05:47:15+00:00",
+  "dedupe_key": "workflow_run:11576865/Character-Voice-Service:38115872460:1",
+  "routing_hints": [
+    "architecture",
+    "operations",
+    "red-reason",
+    "reliability"
+  ],
+  "evidence": {
+    "workflow": "CVS tests",
+    "run_id": "38115872460",
+    "run_attempt": "1",
+    "conclusion": "failure",
+    "trigger_event": "push",
+    "failed_jobs": [
+      {
+        "id": 114400532595,
+        "name": "windows-script-audit",
+        "conclusion": "failure"
+      }
+    ],
+    "failed_steps": [
+      {
+        "job": "windows-script-audit",
+        "number": 4,
+        "name": "Test IndexTTS hang containment and runtime diagnostics",
+        "conclusion": "failure"
+      }
+    ],
+    "capture_error": ""
+  }
+}
