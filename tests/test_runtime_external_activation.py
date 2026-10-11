@@ -156,7 +156,7 @@ def test_corrupt_pending_receipt_fails_closed_without_new_command(tmp_path, monk
         record = publish_activation(root, "IndexTTS", "index-tts")
     finally:
         lease.release()
-    receipt_file = next(root.glob(".external-*.pending.json"))
+    receipt_file = next((root / ".cvs-activation-state").glob("*.pending.json"))
     receipt_file.write_text("{broken", encoding="utf-8")
     monkeypatch.setattr(sup, "_health", lambda spec, timeout=1.5: (False, "offline"))
     with pytest.raises(RuntimeConflictError, match="corrupt activation receipt"):
@@ -226,3 +226,31 @@ def test_receipt_can_only_be_cleared_by_matching_request_identity(tmp_path):
         assert pending_activation(root, "IndexTTS") is None
     finally:
         lock.release()
+
+
+def test_same_service_key_different_engine_cannot_clear_another_request(tmp_path, monkeypatch):
+    sup, spec, root = _external(tmp_path)
+    lease = acquire_activation_lease(root, "IndexTTS")
+    assert lease is not None
+    try:
+        prior = publish_activation(root, "IndexTTS", "different-engine")
+    finally:
+        lease.release()
+    monkeypatch.setattr(sup, "_health", lambda spec, timeout=1.5: (True, None))
+    with pytest.raises(RuntimeConflictError, match="another engine"):
+        sup._request_external_activation(spec)
+    assert pending_activation(root, "IndexTTS")["request_id"] == prior["request_id"]
+    assert len(_commands(root)) == 1
+
+
+def test_internal_receipt_never_appears_as_top_level_external_command(tmp_path):
+    _, _, root = _external(tmp_path)
+    lease = acquire_activation_lease(root, "IndexTTS")
+    assert lease is not None
+    try:
+        publish_activation(root, "IndexTTS", "index-tts")
+    finally:
+        lease.release()
+    assert len(_commands(root)) == 1
+    assert len(list((root / ".cvs-activation-state").glob("*.pending.json"))) == 1
+    assert not any("pending" in p.name for p in root.glob("*.json"))
