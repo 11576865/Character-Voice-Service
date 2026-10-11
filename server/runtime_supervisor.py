@@ -197,7 +197,31 @@ class RuntimeSupervisor:
         return data[-limit:].decode("utf-8", errors="replace").strip()
 
     def status(self, engine_id: str) -> dict:
-        with self._lock:
+        # Startup can own the supervisor lock for minutes. A status/health
+        # request must never wait behind the entire startup deadline.
+        if not self._lock.acquire(blocking=False):
+            spec = self.registry().get(engine_id)
+            if spec is None:
+                return {
+                    "engine": engine_id, "configured": False,
+                    "status": "unconfigured", "managed_by_supervisor": False,
+                }
+            return {
+                "engine": engine_id,
+                "runtime_id": spec.runtime_id,
+                "runtime_revision": spec.configuration_revision,
+                "configured": True,
+                "enabled": spec.enabled,
+                "status": "supervisor-transition",
+                "ready": False,
+                "busy": False,
+                "supervisor_busy": True,
+                "managed_by_supervisor": False,
+                "endpoint": spec.endpoint,
+                "health_url": spec.health_url,
+                "health_error": "runtime lifecycle operation in progress",
+            }
+        try:
             registry = self.registry()
             spec = registry.get(engine_id)
             if spec is None:
@@ -255,6 +279,9 @@ class RuntimeSupervisor:
                 "health_error": health_error if not ready else None,
                 "log_path": str(owned.log_path) if owned else None,
             }
+
+        finally:
+            self._lock.release()
 
     def diagnostics(self) -> dict:
         registry = self.registry()
