@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
+from server.audio_validation import InvalidWav, validate_wav_bytes
 from server.config import ADMIN_TOKEN, HOST, PORT, SAVE_DIR, SAVE_GENERATED_WAV, VOICE_DIR
 from server.emotion_router import choose_reference
 from server.engines import get_adapter, list_engines, synthesize
@@ -424,6 +425,12 @@ def speech(request: SpeechRequest):
 
     provenance = _generation_provenance(request, resolved)
     audio = synthesize(text=request.input, speed=request.speed, profile=selection)
+    # Defense in depth: enforce the public response contract even if the
+    # engine dispatch was monkeypatched or replaced by a future adapter.
+    try:
+        audio = validate_wav_bytes(audio)
+    except InvalidWav as exc:
+        raise HTTPException(status_code=502, detail=f"invalid generated WAV: {exc}") from exc
     saved_path = save_wav(audio)
 
     request_id = uuid.uuid4().hex
