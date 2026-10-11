@@ -11,6 +11,7 @@ import urllib.request
 
 from fastapi import HTTPException
 
+from server.audio_validation import InvalidWav, read_bounded_wav_candidate
 from server.config import DATA_DIR, GPT_SOVITS_BASE_URL
 from server.runtime_registry import runtime_base_url
 from server.runtime_slot_lease import acquire_runtime_slot
@@ -150,9 +151,11 @@ def _synthesize_locked(text: str, speed: float, profile: dict, urls: tuple[str, 
 
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
-            return response.read()
+            return read_bounded_wav_candidate(response)
     except urllib.error.HTTPError as exc:
         raise _backend_error(exc, "TTS") from exc
+    except InvalidWav as exc:
+        raise HTTPException(status_code=502, detail=f"GPT-SoVITS {exc}") from exc
     except HTTPException:
         raise
     except Exception as exc:
