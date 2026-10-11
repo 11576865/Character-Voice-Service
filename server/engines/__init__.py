@@ -63,6 +63,14 @@ def synthesize(text: str, speed: float, profile: dict) -> bytes:
     engine_id = str(model.get("engine") or "gpt-sovits")
     registry_spec = runtime_supervisor.registry().get(engine_id)
     group = registry_spec.exclusive_group if registry_spec and registry_spec.enabled else None
+    owned = runtime_supervisor._owned.get(engine_id)
+    if owned is not None and owned.slot_lease is not None:
+        if group not in {None, owned.slot_lease.group}:
+            raise HTTPException(
+                status_code=503,
+                detail=f"{engine_id}: GPU ownership group changed during engine lifetime",
+            )
+        group = owned.slot_lease.group
     try:
         # Acquire GPU group activity BEFORE ensure_ready(), because that call
         # may launch an engine and auto-stop its managed sibling. The
