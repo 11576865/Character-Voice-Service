@@ -43,6 +43,20 @@ This repair makes the failure **bounded and diagnosable**:
    callbacks check the active request identity before terminating any
    process.
 
+## Supervisor status responsiveness
+
+A second observable wait existed outside IndexTTS itself:
+`RuntimeSupervisor.start()` can hold its lifecycle mutex throughout
+engine startup (potentially several minutes). Its ordinary `status()`
+used the same mutex and could therefore block UI diagnostics until
+startup timed out. Status and aggregated diagnostics now try the mutex
+without waiting; if another thread owns the lifecycle transition, they
+return `status=supervisor-transition`, `supervisor_busy=true` and
+`ready=false` promptly. This is a **status observation**, not a
+cancellation or forced stop of the startup attempt. Actual start/stop
+operations remain mutually exclusive. A real user may still need to wait
+for a bounded startup timeout before the lifecycle operation finishes.
+
 ## Operational boundaries
 
 **Not a general cancellation API.** IndexTTS has not gained per-request
