@@ -71,3 +71,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## IndexTTS 推理卡死隔离
 
 [IndexTTS hang containment v1](docs/indextts-hang-containment-v1.md) 为单模型推理加上了忙碌时快速拒绝、健康状态中的运行时长、可配置的 240 秒默认推理看门狗，以及超限时的独立 Sidecar 进程级恢复。它不是细粒度取消接口；真实 GPU/系统监督器恢复仍需验收。
+
+## 跨进程 GPU 独占组租约
+
+[Runtime GPU slot ownership v1](docs/runtime-slot-cross-process-v1.md) 为托管引擎增加操作系统文件锁：同一 `CVS_DATA_DIR` 的多个 CVS 进程不再仅凭健康探测同时启动占用同一 `exclusive_group` 的语音引擎。租约随已观测的托管子进程生命周期持有，异常终止和正常停止会释放。它不能证明 CVS 父进程崩溃后没有遗留仍在占用 GPU 的孤儿引擎，也不自动协调独立的 System Supervisor。
