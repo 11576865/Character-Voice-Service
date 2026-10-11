@@ -69,12 +69,22 @@ def inference_state() -> dict:
 
 def _terminate_stalled_inference(request_id: str, deadline: float) -> None:
     """A stuck native/GPU infer call cannot be safely cancelled in-process."""
-    print(
-        f"IndexTTS inference watchdog exceeded {deadline:g}s; "
-        f"aborting sidecar process, request_id={request_id}",
-        flush=True,
-    )
-    os._exit(124)
+    # Ignore late timer callbacks after the tracked inference has already
+    # returned, or after a different request becomes the active owner.
+    with _STATE_LOCK:
+        active = _ACTIVE_INFERENCE
+        if not active or active["request_id"] != request_id:
+            return
+        if time.monotonic() - active["started"] < deadline:
+            return
+        print(
+            f"IndexTTS inference watchdog exceeded {deadline:g}s; "
+            f"aborting sidecar process, request_id={request_id}",
+            flush=True,
+        )
+        # Force-stop only this engine's dedicated process; Python threads
+        # cannot safely interrupt a hung native/GPU inference stack.
+        os._exit(124)
 
 
 def infer_with_watchdog(tts, kwargs: dict, *, request_id: str, deadline: float) -> None:
