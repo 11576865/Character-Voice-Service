@@ -27,7 +27,7 @@ def activation_scope(request_dir: str | Path, service_key: str) -> tuple[Path, s
     # Stable per-service OS lock and pending receipt. Do not interpret
     # service_key as a path or permit special characters in file names.
     digest = hashlib.sha256(service_key.encode("utf-8")).hexdigest()[:32]
-    return root, "external-" + digest, root / (".external-" + digest + ".pending.json")
+    return root, "external-" + digest, root / ".cvs-activation-state" / (digest + ".pending.json")
 
 
 def acquire_activation_lease(request_dir: str | Path, service_key: str) -> RuntimeSlotLease | None:
@@ -67,6 +67,8 @@ def pending_activation(request_dir: str | Path, service_key: str) -> dict | None
         or record.get("phase") != "pending"
         or not isinstance(record.get("request_id"), str)
         or not record["request_id"]
+        or not isinstance(record.get("engine_id"), str)
+        or not record["engine_id"]
     ):
         raise ExternalActivationUncertain(f"invalid activation receipt: {path}")
     return record
