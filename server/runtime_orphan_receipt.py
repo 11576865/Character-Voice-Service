@@ -13,9 +13,6 @@ import time
 import uuid
 from pathlib import Path
 
-from server.runtime_slot_lease import acquire_runtime_slot
-
-
 class UncertainRuntimeOwner(RuntimeError):
     """A possible former child is still alive or cannot be disproved."""
 
@@ -50,6 +47,10 @@ def read_receipt(group: str, directory: Path) -> dict | None:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise UncertainRuntimeOwner(
+            f"{group}: cannot inspect runtime owner receipt: {path}"
+        ) from exc
     try:
         record = json.loads(raw)
     except (ValueError, UnicodeError) as exc:
