@@ -103,3 +103,7 @@ Windows 上建议让每个语音引擎使用自己的 Python 运行环境，并�
 ## 外部 System Supervisor 部署前只读检查
 
 [External Supervisor read-only preflight v1](docs/runtime-external-supervisor-readonly-preflight-v1.md) 提供独立标准库命令 `scripts/external_supervisor_preflight.py`，交叉核查 CVS Registry、实际 Supervisor 服务与控制路径、外部状态文件和待确认激活请求。默认不发起命令、不探测网络、不启动进程，也不会因导入服务端配置初始化管理员令牌。使用 `--probe-health` 才会执行不跟随重定向的本机 HTTP GET。检查结果不能替代真实 Supervisor 请求确认和 GPU 验收。
+
+## 安全启动基线与基础审计
+
+[CVS 基础设施风险审计（2026-10-11）](docs/foundation-audit-2026-10-11.md) 将管理员令牌、默认网络入口、公开工作负载资源预算、CI 覆盖与真实 GPU／Supervisor 现场验收分层列出。管理员令牌使用跨进程独占创建与私有权限，不因两个 CVS 实例并发启动而产生不同口令。**服务默认只监听 `127.0.0.1`**；若 Reader、Android 等跨设备客户端需要局域网接入，可显式设置 `CVS_HOST=0.0.0.0`，但应配合防火墙、可信网络和适当的认证／TLS 网关；当前公开语音接口并不因管理员令牌存在而自动受保护。真实 GPU 与外部 System Supervisor 验收仍未完成。
